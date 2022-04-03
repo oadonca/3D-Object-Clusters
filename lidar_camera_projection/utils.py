@@ -198,14 +198,14 @@ def roty(t):
     
 def within_bb_indices(bb_list, points):
     """
-    Gets indices of projected lidar points within a list of bounding boxes
+    Returns an list of lists of indices for each bounding box
     """
     inds = []
     
     for bb in bb_list:
         x_range = [bb[0][0], bb[1][0]]
         y_range = [bb[0][1], bb[2][1]]
-        inds.extend(np.where((points[0, :] < x_range[1]) & (points[0, :] >= x_range[0]) &
+        inds.append(np.where((points[0, :] < x_range[1]) & (points[0, :] >= x_range[0]) &
                         (points[1, :] < y_range[1]) & (points[1, :] >= y_range[0])
                         )[0])
         
