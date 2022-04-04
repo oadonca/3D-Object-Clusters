@@ -65,6 +65,31 @@ def dist_btw_2geometries(a, b):
     return dist
 
 
+def find_center_faces(bb, bb_c):
+    bb_coord = bb.get_box_points()
+
+    #print(print(np.asarray(bb_coord)))
+
+    half_extent = bb.get_half_extent()
+
+    arr = np.empty((0,3), int)
+
+    arr = np.append(arr, np.array([[bb_c[0] + half_extent[0], bb_c[1], bb_c[2]]]), axis=0)
+    arr = np.append(arr, np.array([[bb_c[0] - half_extent[0], bb_c[1], bb_c[2]]]), axis=0)
+
+    arr = np.append(arr, np.array([[bb_c[0], bb_c[1] + half_extent[1], bb_c[2]]]), axis=0)
+    arr = np.append(arr, np.array([[bb_c[0], bb_c[1] - half_extent[1], bb_c[2]]]), axis=0)
+
+    arr = np.append(arr, np.array([[bb_c[0], bb_c[1], bb_c[2] + half_extent[2]]]), axis=0)
+    arr = np.append(arr, np.array([[bb_c[0], bb_c[1], bb_c[2] - half_extent[2]]]), axis=0)
+
+    print(arr)
+    return arr
+
+
+
+
+
 if __name__ == "__main__":
     pcd = convert_bin_to_array("data/000000.bin")
     visualize_point_cloud(pcd)
@@ -86,3 +111,7 @@ if __name__ == "__main__":
 
     print("Distance between the centers of PointCloud and Oriented Bounding Box:")
     dist1 = dist_btw_2geometries(pcd_c, obb_c)
+
+
+    print("Center of all the faces of the bounding box:")
+    bb_faces_c = find_center_faces(aabb, aabb_c)
