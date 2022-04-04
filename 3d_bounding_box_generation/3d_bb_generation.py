@@ -66,14 +66,22 @@ def dist_btw_2geometries(a, b):
 
 
 def find_center_faces(bb, bb_c):
+
+    """
+    returns a numpy array with six coordinates of different cntres of the faces of the bounding box 
+    """
+
+    # returns the eight bounding box coordinates of the corners; not used anywhere
     bb_coord = bb.get_box_points()
 
-    #print(print(np.asarray(bb_coord)))
-
+    # returns the length, breadth and height divided by 2 of the bounding box 
     half_extent = bb.get_half_extent()
 
+    # empty numpy array initializaion 
     arr = np.empty((0,3), int)
 
+
+    # formula used to calculate the centres of the six faces is = centroid +/- (lenghth/2 or breadth/2 or height/2)
     arr = np.append(arr, np.array([[bb_c[0] + half_extent[0], bb_c[1], bb_c[2]]]), axis=0)
     arr = np.append(arr, np.array([[bb_c[0] - half_extent[0], bb_c[1], bb_c[2]]]), axis=0)
 
@@ -85,8 +93,6 @@ def find_center_faces(bb, bb_c):
 
     print(arr)
     return arr
-
-
 
 
 
