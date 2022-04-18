@@ -10,6 +10,7 @@ from matplotlib.patches import Polygon
 from matplotlib import patches
 
 from utils import *
+from iou3d import get_3d_box, box3d_iou
 
 
 def render_image_with_boxes(img, objects, calib):
@@ -91,14 +92,14 @@ def render_lidar_with_boxes(pc_velo, objects, calib, img_width, img_height, dbsc
                                          )
 
 
-def render_lidar_on_image(pts_velo, img, calib, img_width, img_height, visualize=True):
+def render_lidar_on_image(pts_velo, orig_img, calib, img_width, img_height, visualize=True):
     """
     Projects the given lidar points onto the given image using the projection/transformation matrices provided in calib
     
     Returns: Image and projected points
     """
     
-    orig_img = np.copy(img)
+    img = np.copy(orig_img)
     # projection matrix (project from velo2cam2)
     proj_velo2cam2 = project_velo_to_cam2(calib)
 
@@ -125,17 +126,17 @@ def render_lidar_on_image(pts_velo, img, calib, img_width, img_height, visualize
 
     cmap = plt.cm.get_cmap('hsv', 256)
     cmap = np.array([cmap(i) for i in range(256)])[:, :3] * 255
-
-    # Display projected point cloud on the image
-    for i in range(imgfov_pc_pixel.shape[1]):
-        depth = imgfov_pc_cam2[2, i]
-        color = cmap[int(640.0 / depth), :]
-        cv2.circle(img, (int(np.round(imgfov_pc_cam2[0, i]/imgfov_pc_cam2[2, i])),
-                         int(np.round(imgfov_pc_cam2[1, i]/imgfov_pc_cam2[2, i]))),
-                   2, color=tuple(color), thickness=-1)
     
     if visualize:
-        fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+        # Display projected point cloud on the image
+        for i in range(imgfov_pc_pixel.shape[1]):
+            depth = imgfov_pc_cam2[2, i]
+            color = cmap[min(int(640.0 / depth), 255), :]
+            cv2.circle(img, (int(np.round(imgfov_pc_cam2[0, i]/imgfov_pc_cam2[2, i])),
+                            int(np.round(imgfov_pc_cam2[1, i]/imgfov_pc_cam2[2, i]))),
+                    2, color=tuple(color), thickness=-1)
+            
+        fig, ax = plt.subplots(2, 1, figsize=(5, 10))
 
         ax[0].set_title('Original Image')
         ax[0].imshow(orig_img)
@@ -147,7 +148,7 @@ def render_lidar_on_image(pts_velo, img, calib, img_width, img_height, visualize
         plt.xticks([])
         plt.show()
         
-    return img, imgfov_pc_cam2
+    return imgfov_pc_cam2
 
 def render_pointcloud_from_projection(image, projected_points, calib, image_width, image_height):
     # Get image to cam 2 frame transform
@@ -260,9 +261,6 @@ def segment_bb_frustum_from_projected_pcd(bb_list, projected_pointcloud, calib, 
     o3d_pcd_list = [] 
     mask_points_list = None
 
-    fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-    ax.clear()
-
     for i, idx in enumerate(inds):
         bb_pts_2d = pts_2d[:, idx]
         
@@ -303,11 +301,12 @@ def segment_bb_frustum_from_projected_pcd(bb_list, projected_pointcloud, calib, 
                 o3d_pcd_list.append(pcd)
 
     # print(mask_points_list.shape)
-    
-
-    ax.imshow(orig_img)
-    ax.scatter(mask_points_list[0, :], mask_points_list[1, :], s=1, c='red')
-    plt.show()
+    if visualize:
+        fig, ax = plt.subplots(1, 1, figsize=(5, 5))
+        ax.clear()
+        ax.imshow(orig_img)
+        ax.scatter(mask_points_list[0, :], mask_points_list[1, :], s=1, c='red')
+        plt.show()
 
     if visualize:
         open3d.visualization.draw_geometries(o3d_pcd_list + labels,
@@ -331,7 +330,7 @@ def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=True):
     pcd.points = open3d.utility.Vector3dVector(pointcloud)
     
     # Run RANSAC
-    model, inliers = pcd.segment_plane(distance_threshold=0.1,ransac_n=3, num_iterations=250)
+    model, inliers = pcd.segment_plane(distance_threshold=0.1,ransac_n=3, num_iterations=500)
 
     # Get the average inlier coorindate values
     average_inlier = np.mean(pointcloud[inliers], axis=0)
@@ -368,7 +367,7 @@ def apply_dbscan(pointcloud, keep_n=None, visualize=True):
     
     # Run DBSCAN on point cloud
     # with open3d.utility.VerbosityContextManager(open3d.utility.VerbosityLevel.Debug) as cm:
-    labels = np.array(pcd.cluster_dbscan(eps=1.5, min_points=10))
+    labels = np.array(pcd.cluster_dbscan(eps=1, min_points=5))
 
     # Set colors of point cloud to see DBSCAN clusters
     max_label = labels.max()
@@ -395,116 +394,55 @@ def apply_dbscan(pointcloud, keep_n=None, visualize=True):
     
     return pcd_list
 
-def generate_3d_bb(pcd_list, oriented=False, visualize=True):
-    """
-    Generates bounding boxes around each point cloud in pcd_list
-    """
-    generated_bb_list = []
-    for pcd in pcd_list:
-        if np.max(np.array(pcd.colors)) > 0:
-            bb = pcd.get_axis_aligned_bounding_box() if not oriented else pcd.get_oriented_bounding_box()
-            bb.color = [1.0, 0, 0]
-            generated_bb_list.append(bb)
-        
-    display_list = pcd_list + generated_bb_list
-        
-    if visualize:
-        open3d.visualization.draw_geometries(display_list)
-        
-    return generated_bb_list
-
-def get_groundtruth_3d_bb(objects, calib):
-    """
-    Gets the ground truth bounding boxes provided in objects
-    """
-    # Projection matrix
-    proj_cam2_2_velo = project_cam2_to_velo(calib)
-
-    bb_list = []
-
-    # Draw objects on lidar
-    for obj in objects:
-        if obj.type == 'DontCare':
-            continue
-
-        # Project boxes from camera to lidar coordinate
-        boxes3d_pts = project_camera_to_lidar(obj.in_camera_coordinate(), proj_cam2_2_velo)
-
-        # Open3d boxes
-        boxes3d_pts = open3d.utility.Vector3dVector(boxes3d_pts.T)
-        box = open3d.geometry.OrientedBoundingBox.create_from_points(boxes3d_pts)
-        box.color = [0, 1.0, 0]
-        bb_list.append(box)
+def mask_rcnn_detection_analysis(generated_3d_bb_list, kitti_gt_3d_bb):
     
-    return bb_list
-
-def get_groundtruth_2d_bb():
-    # manually chosen bounding boxes in form [topleft x/y, topright x/y, bottomleft x /y, bottomright x/y]
-    # bb 1 (leftmost minivan):                          
-    bb1 = [(185, 183), (300, 183), (185, 240), (300, 240)]
-    # bb 2 (person next to traffic light in median):    
-    bb2 = [(442, 167), (474, 167), (442, 255), (474, 255)]
-    # bb 3 (car in middle of image):                    
-    bb3 = [(589, 189), (668, 189), (589, 252), (668, 252)]
-    # bb 4 (pedestrian with bike):                      
-    bb4 = [(905, 173), (996, 173), (905, 267), (996, 267)]
-    # bb5 farthest parked car
-    bb5 = [(519, 179), (573, 179), (519, 200), (573, 200)]
-    bb_list = [bb1, bb2, bb3, bb4, bb5]   
-    
-    return bb_list
-
-def get_detector_2d_bb(image = None, visualize=True):
-    mask_bboxes = np.load('mask_rcnn_data/bboxes_kitti_000114.npy')
-    
-    # print('MASK BOXES\n', mask_bboxes)
-    bb_list = []
-    for bb in mask_bboxes:
-        bb_list.append([(bb[0], bb[1]), (bb[2], bb[1]), (bb[0], bb[3]), (bb[2], bb[3])])
+    for i, kitti_3d_bb in enumerate(kitti_gt_3d_bb):
+        kitti_3d_bb_center = kitti_3d_bb.get_center()
+        kitti_3d_bb_face_centers = get_bb_centers(kitti_3d_bb)
         
-    if visualize:
-        fig, ax = plt.subplots(1, 1, figsize=(5,5))
-        ax.imshow(image) if image is not None else None
-        for bb in bb_list:
-            # print(bb)
-            ax.add_patch(patches.Rectangle(bb[0], bb[1][0]-bb[0][0], bb[2][1]-bb[1][1], fill=None))
+        # Get the closest box
+        closest_generated_box = None
+        closest_generated_center = None
+        closest_center_distance = float('inf')
+        for j, generated_3d_bb in enumerate(generated_3d_bb_list):
+            generated_3d_bb_center = generated_3d_bb.get_center()
+            distance = np.linalg.norm(kitti_3d_bb_center - generated_3d_bb_center)
+            if distance < closest_center_distance:
+                closest_center_distance = distance
+                closest_generated_box = generated_3d_bb
+                closest_generated_center = generated_3d_bb_center
+                
+        # Calculate face centers for the KITTI GT box
+        kitti_3d_bb_closest_face_center = None
+        closest_gt_face_center_distance = float('inf')
+        for face_center in kitti_3d_bb_face_centers:
+            distance = np.linalg.norm(face_center - np.array([0, 0, 0]))
+            if distance < closest_gt_face_center_distance:
+                closest_gt_face_center_distance = distance
+                kitti_3d_bb_closest_face_center = face_center
+                
+        # Calculate face centers for the closest generated box
+        closest_box_face_centers = get_bb_centers(closest_generated_box)
+        closest_box_closest_face_center = None
+        closest_box_face_center_distance = float('inf')
+        for face_center in closest_box_face_centers:
+            distance = np.linalg.norm(face_center - np.array([0, 0, 0]))
+            if distance < closest_box_face_center_distance:
+                closest_box_face_center_distance = distance
+                closest_box_closest_face_center = face_center
+                
+        # Calculating 3D IOU
+        kitti_gt_extent = kitti_3d_bb.get_extent()
+                
+        print('*'*50)
+        print(f'{f"KITTI GT 3D BB #{i} center: ":<50} {kitti_3d_bb_center} m.')
+        print(f'{f"CLOSEST GENERATED 3D BB center: ":<50} {closest_generated_center} m.')
+        print(f'{"Smallest distance between bb centers: ":<50} {closest_center_distance:>10.4f} m.')
+        print(f'{"KITTI GT Closest face center: ":<50} {kitti_3d_bb_closest_face_center}')
+        print(f'{"GENERATED Closest face center: ":<50} {closest_box_closest_face_center}')
+        print(f'{"Distance between closest face centers:":<50} {np.linalg.norm(closest_box_closest_face_center - kitti_3d_bb_closest_face_center):>10.4f} m.')
         
-        plt.show()
-        
-    return bb_list
-
-def get_bb_centers(bb):
-    """
-    bb: Open3D bounding box
-    
-    returns a numpy array with six coordinates of different cntres of the faces of the bounding box 
-    """
-
-    bb_c = bb.get_center()
-
-    # returns the eight bounding box coordinates of the corners; not used anywhere
-    bb_coord = bb.get_box_points()
-
-    # returns the length, breadth and height divided by 2 of the bounding box 
-    half_extent = bb.get_half_extent()
-
-    # empty numpy array initializaion 
-    arr = np.empty((0,3), int)
-
-    # formula used to calculate the centres of the six faces is = centroid +/- (lenghth/2 or breadth/2 or height/2)
-    arr = np.append(arr, np.array([[bb_c[0] + half_extent[0], bb_c[1], bb_c[2]]]), axis=0)
-    arr = np.append(arr, np.array([[bb_c[0] - half_extent[0], bb_c[1], bb_c[2]]]), axis=0)
-
-    arr = np.append(arr, np.array([[bb_c[0], bb_c[1] + half_extent[1], bb_c[2]]]), axis=0)
-    arr = np.append(arr, np.array([[bb_c[0], bb_c[1] - half_extent[1], bb_c[2]]]), axis=0)
-
-    arr = np.append(arr, np.array([[bb_c[0], bb_c[1], bb_c[2] + half_extent[2]]]), axis=0)
-    arr = np.append(arr, np.array([[bb_c[0], bb_c[1], bb_c[2] - half_extent[2]]]), axis=0)
-
-    return arr
-
-def get_closest_bb_center(bb_centers):
-    pass
+        print('*'*50)
 
 def compare_generation_accuracy(comp_list, visualize=True):    
     # comp format: [point cloud, ground truth bb, generated bb]
@@ -537,102 +475,135 @@ def compare_generation_accuracy(comp_list, visualize=True):
         if visualize:
             open3d.visualization.draw_geometries(comp + [pointcloud_center, generated_center, groundtruth_center])
         
-def draw_masks(img, masks, color = None, with_edge = True, alpha = 0.8):
-    fig, ax = plt.subplots(1, 1, figsize=(10, 5))
-    ax.imshow(img)
+def mask_detection(file_num = 0, use_vis = False):
+    run_files = [file_num] if not isinstance(file_num, list) else file_num
     
-    taken_colors = set([0, 0, 0])
-    if color is None:
-        random_colors = np.random.randint(0, 255, (masks.shape[0], 3))
-        color = [tuple(c) for c in random_colors]
-        color = np.array(color, dtype=np.uint8)
-    polygons = []
-    for i, mask in enumerate(masks):
-        if with_edge:
-            contours, _ = bitmap_to_polygon(mask)
-            polygons += [Polygon(c) for c in contours]
+    for i, file in enumerate(run_files):
+        print('='*50)
+        print(f'Running File {str(file).zfill(6)}')
+        print(f'Starting File {str(file).zfill(6)} Object Detection')
+        total_time = 0
 
-        color_mask = color[i]
-        while tuple(color_mask) in taken_colors:
-            color_mask = get_bias_color(color_mask)
-        taken_colors.add(tuple(color_mask))
-
-        mask = mask.astype(bool)
-        img[mask] = img[mask] * (1 - alpha) + color_mask * alpha
-
-    p = PatchCollection(
-        polygons, facecolor='none', edgecolors='w', linewidths=1, alpha=0.8)
-    ax.add_collection(p)
+        #############################################################################
+        # LOAD KITTI GROUNDTRUTH
+        #############################################################################
+        start = time.perf_counter()
+        kitti_gt_images, kitti_gt_pointclouds, kitti_gt_labels, kitti_gt_calibs = load_kitti_groundtruth(file)
+        time_diff= time.perf_counter() - start
         
-    plt.show()
-    
-def mask_remove_lidar_outliers(projected_pts, masks):
-    for i, mask in enumerate(masks):
-        x = int(np.round(projected_pts[0, i]/projected_pts[2, i]))
-        y = int(np.round(projected_pts[1, i]/projected_pts[2, i]))
+        #############################################################################
+        # LOAD MASK RCNN INFERENCE
+        #############################################################################
+        start = time.perf_counter()
+        mr_inf_images, mr_inf_bboxes, mr_inf_segmentations, mr_inf_labels = load_mask_rcnn_inference(file)    
+        time_diff= time.perf_counter() - start
+        print(f'{"# MASK RCNN DETECTIONS: ":<30}: {len(mr_inf_labels):>5}.')
+        print(f'{"# KITTI GT LABELS: ":<30}: {len(kitti_gt_labels):>5}.\n\n')
+        print(f'{"LOADING MASK RCNN INFERENCE":<30}: {time_diff:.>5.4f} s.')
+        print(f'{"LOADING KITTI GT":<30}: {time_diff:.>5.4f} s.')
+
+        #############################################################################
+        # GET KITTI GROUND TRUTH 3D BOUNDING BOXES
+        #############################################################################
+        start = time.perf_counter()
+        kitti_gt_3d_bb = get_groundtruth_3d_bb(kitti_gt_labels, kitti_gt_calibs)
+        time_diff= time.perf_counter() - start
+        total_time += time_diff
+        print(f'{"KITTI GT 3D BB":<30}: {time_diff:.>5.4f} s.')
         
-def mask_detection():
-    # Load image, calibration file, label bbox
-    rgb = cv2.cvtColor(cv2.imread(os.path.join('data/000114_image.png')), cv2.COLOR_BGR2RGB)
-    img_height, img_width, img_channel = rgb.shape
+        #############################################################################
+        # GET DETECTOR 2D BB LIST #
+        #############################################################################
+        mr_inf_2d_bb_list = get_detector_2d_bb(mr_inf_bboxes, kitti_gt_images, visualize=use_vis)  
+        
+        if use_vis:
+            draw_masks(kitti_gt_images, mr_inf_segmentations)
+        
+        #############################################################################
+        # REMOVE GROUND 
+        #############################################################################
+        start = time.perf_counter()
+        ground_remove_kitti_gt_pcd = remove_ground(kitti_gt_pointclouds, labels=kitti_gt_3d_bb, removal_offset=.075, visualize=use_vis)
+        time_diff= time.perf_counter() - start
+        total_time += time_diff
+        print(f'{"Ground Removal Time":<30}: {time_diff:.>5.4f} s.')
+        
+        #############################################################################
+        # PROJECT KITTI GT POINTCLOUD POINTS ONTO IMAGE
+        #############################################################################
+        start = time.perf_counter()
+        projected_kitti_gt_pcd = render_lidar_on_image(ground_remove_kitti_gt_pcd, kitti_gt_images, kitti_gt_calibs, kitti_gt_images.shape[1], kitti_gt_images.shape[0], visualize=use_vis)
+        time_diff= time.perf_counter() - start
+        total_time += time_diff
+        print(f'{"3D to 2D Projection Time":<30}: {time_diff:.>5.4f} s.')
+        
+        #############################################################################
+        # SEGMENT FRUSTUMS 
+        #############################################################################
+        start = time.perf_counter()
+        frustum_segmented_kitti_gt_pcd_list = segment_bb_frustum_from_projected_pcd(mr_inf_2d_bb_list, projected_kitti_gt_pcd, kitti_gt_calibs, labels=kitti_gt_3d_bb, masks=mr_inf_segmentations, visualize=use_vis, orig_img=kitti_gt_images)
+        time_diff= time.perf_counter() - start
+        total_time += time_diff
+        print(f'{"Frustum Segmentation Time":<30}: {time_diff:.>5.4f} s.')
+        
+        #############################################################################
+        # APPLY DBSCAN CLUSTERING TO EACH FRUSTUM 
+        #############################################################################
+        start = time.perf_counter()
+        clustered_kitti_gt_pcd_list = []
+        for pcd in frustum_segmented_kitti_gt_pcd_list:
+            clustered_kitti_gt_pcd_list.extend(apply_dbscan(pcd, keep_n=1, visualize=False))
+        time_diff= time.perf_counter() - start
+        total_time += time_diff
+        print(f'{"DBSCAN Clustering Time":<30}: {time_diff:.>5.4f} s.')
+    
+        #############################################################################
+        # GENERATE 3D BOUNDING BOXES 
+        #############################################################################
+        start = time.perf_counter()
+        generated_3d_bb_list = generate_3d_bb(clustered_kitti_gt_pcd_list, visualize=use_vis)
+        time_diff= time.perf_counter() - start
+        total_time += time_diff
+        print(f'{"Bounding Box Generation Time":<30}: {time_diff:.>5.4f} s.')
+    
+        #############################################################################
+        # VISUALIZE RESULTS FOR SCENE
+        #############################################################################
+        if use_vis:
+            open3d.visualization.draw_geometries(clustered_kitti_gt_pcd_list + kitti_gt_3d_bb + generated_3d_bb_list)
+    
+        print(f'File {str(file).zfill(6)} Object Detection {"Total Execution Time":<40}: {total_time:.>5.4f} s.')
+        
+        print(f'Finished Running file {str(file).zfill(6)} Object Detection')
+        print(f'Starting Running file {str(file).zfill(6)} Detection Analysis')
+        
+        mask_rcnn_detection_analysis(generated_3d_bb_list, kitti_gt_3d_bb)
+        
+        print(f'Finished Running file {str(file).zfill(6)} Detection Analysis')
+        print('='*50)
+        
 
-    total_time = 0
-
-    # Load calibration
-    start = time.perf_counter()
-    calib = read_calib_file('data/000114_calib.txt')
-    stop = time.perf_counter()
-    time_diff = stop-start
-    total_time += time_diff
-    print(f'{"Calibration File Loading Time":<30}: {time_diff:.>5.4f} s.')
-
-    # Load labels
-    start = time.perf_counter()
-    labels = load_label('data/000114_label.txt')
-    
-    test_labels = load_label('data/000114_label_test.txt')
-    stop = time.perf_counter()
-    time_diff = stop-start
-    total_time += time_diff
-    print(f'{"Label Loading Time":<30}: {time_diff:.>5.4f} s.')
-    
-    # Load Lidar PC
-    start = time.perf_counter()
-    pc_velo = load_velo_scan('data/000114.bin')[:, :3]
-    stop = time.perf_counter()
-    time_diff = stop-start
-    total_time += time_diff
-    print(f'{"LiDAR Pointcloud Loading Time":<30}: {time_diff:.>5.4f} s.') 
-    
-    mask_labels = np.load('mask_rcnn_data/labels_kitti_000114.npy')
-    mask_segm = np.load('mask_rcnn_data/segmentation_kitti_000114.npy')
-    
-    draw_masks(rgb, mask_segm[:2])
         
 def group5_call():
     # Load image, calibration file, label bbox
-    rgb = cv2.cvtColor(cv2.imread(os.path.join('data/000114_image.png')), cv2.COLOR_BGR2RGB)
+    rgb = cv2.cvtColor(cv2.imread(os.path.join('kitti_groundtruth/000114_image.png')), cv2.COLOR_BGR2RGB)
     orig_img = np.copy(rgb)
     img_height, img_width, img_channel = rgb.shape
-
-    mask_segm = np.load('mask_rcnn_data/segmentation_kitti_000114.npy')
     
-    draw_masks(rgb, mask_segm)
-
     total_time = 0
 
     #############################################################################
     # LOAD MASKS
     #############################################################################
-    mask_segm = np.load('mask_rcnn_data/segmentation_kitti_000114.npy')
+    mask_segm = np.load('mask_rcnn_inference/segmentation_kitti_000114.npy')
+    draw_masks(rgb, mask_segm)
 
     #############################################################################
     # Load Calibration
     #############################################################################
     start = time.perf_counter()
-    calib = read_calib_file('data/000114_calib.txt')
-    stop = time.perf_counter()
-    time_diff = stop-start
+    calib = read_calib_file('kitti_groundtruth/000114_calib.txt')
+    time_diff= time.perf_counter() - start
     total_time += time_diff
     print(f'{"Calibration File Loading Time":<30}: {time_diff:.>5.4f} s.')
 
@@ -640,11 +611,10 @@ def group5_call():
     # Load Labels
     #############################################################################
     start = time.perf_counter()
-    labels = load_label('data/000114_label.txt')
+    labels = load_label('kitti_groundtruth/000114_label.txt')
     
-    test_labels = load_label('data/000114_label_test.txt')
-    stop = time.perf_counter()
-    time_diff = stop-start
+    test_labels = load_label('kitti_groundtruth/000114_label_test.txt')
+    time_diff= time.perf_counter() - start
     total_time += time_diff
     print(f'{"Label Loading Time":<30}: {time_diff:.>5.4f} s.')
     
@@ -652,9 +622,8 @@ def group5_call():
     # Load Lidar PC
     #############################################################################
     start = time.perf_counter()
-    pc_velo = load_velo_scan('data/000114.bin')[:, :3]
-    stop = time.perf_counter()
-    time_diff = stop-start
+    pc_velo = load_velo_scan('kitti_groundtruth/000114.bin')[:, :3]
+    time_diff= time.perf_counter() - start
     total_time += time_diff
     print(f'{"LiDAR Pointcloud Loading Time":<30}: {time_diff:.>5.4f} s.') 
 
@@ -669,8 +638,7 @@ def group5_call():
     #############################################################################
     start = time.perf_counter()
     segmented_pc_velo = remove_ground(pc_velo, labels=get_groundtruth_3d_bb(labels, calib), removal_offset=.1, visualize=False)
-    stop = time.perf_counter()
-    time_diff = stop-start
+    time_diff= time.perf_counter() - start
     total_time += time_diff
     print(f'{"Ground Removal Time":<30}: {time_diff:.>5.4f} s.')
     
@@ -683,9 +651,8 @@ def group5_call():
     # VIEW PROJECTED LIDAR #
     #############################################################################
     start = time.perf_counter()
-    im, points = render_lidar_on_image(segmented_pc_velo, rgb, calib, img_width, img_height, visualize=False)
-    stop = time.perf_counter()
-    time_diff = stop-start
+    points = render_lidar_on_image(segmented_pc_velo, rgb, calib, img_width, img_height, visualize=False)
+    time_diff= time.perf_counter() - start
     total_time += time_diff
     print(f'{"3D to 2D Projection Time":<30}: {time_diff:.>5.4f} s.')
     
@@ -702,8 +669,7 @@ def group5_call():
 
     start = time.perf_counter()
     frustum_pcd_list = segment_bb_frustum_from_projected_pcd(detector_bb_list, points, calib, labels=get_groundtruth_3d_bb(labels, calib), masks=mask_segm, visualize=True, orig_img=orig_img)
-    stop = time.perf_counter()
-    time_diff = stop-start
+    time_diff= time.perf_counter() - start
     total_time += time_diff
     print(f'{"Frustum Segmentation Time":<30}: {time_diff:.>5.4f} s.')
 
@@ -714,8 +680,7 @@ def group5_call():
     dbscan_pcd_list = []
     for pcd in frustum_pcd_list:
         dbscan_pcd_list.extend(apply_dbscan(pcd, keep_n=1, visualize=False))
-    stop = time.perf_counter()
-    time_diff = stop-start
+    time_diff= time.perf_counter() - start
     total_time += time_diff
     print(f'{"DBSCAN Clustering Time":<30}: {time_diff:.>5.4f} s.')
             
@@ -723,8 +688,7 @@ def group5_call():
     
     start = time.perf_counter()
     generated_bb_list = generate_3d_bb(dbscan_pcd_list, visualize=False)
-    stop = time.perf_counter()
-    time_diff = stop-start
+    time_diff= time.perf_counter() - start
     total_time += time_diff
     print(f'{"Bounding Box Generation Time":<30}: {time_diff:.>5.4f} s.')
     
@@ -736,19 +700,42 @@ def group5_call():
     # Bounding box generation analysis
     # Get ground truth bounding boxes, generated bounding boxes, and respective point cloud
 
-    # comp_list = []
+    comp_list = []
 
-    # comp_list.append([dbscan_pcd_list[0], groundtruth_bb_list[1], generated_bb_list[0]])
-    # comp_list.append([dbscan_pcd_list[2], groundtruth_bb_list[3], generated_bb_list[2]])
-    # comp_list.append([dbscan_pcd_list[4], groundtruth_bb_list[0], generated_bb_list[4]])
-    # comp_list.append([dbscan_pcd_list[7], groundtruth_bb_list[2], generated_bb_list[7]])
-    # comp_list.append([dbscan_pcd_list[9], groundtruth_bb_list[4], generated_bb_list[9]])
+    comp_list.append([dbscan_pcd_list[0], groundtruth_bb_list[1], generated_bb_list[0]])
+    comp_list.append([dbscan_pcd_list[2], groundtruth_bb_list[3], generated_bb_list[2]])
+    comp_list.append([dbscan_pcd_list[4], groundtruth_bb_list[0], generated_bb_list[4]])
+    comp_list.append([dbscan_pcd_list[7], groundtruth_bb_list[2], generated_bb_list[7]])
+    comp_list.append([dbscan_pcd_list[9], groundtruth_bb_list[4], generated_bb_list[9]])
     
-    # compare_generation_accuracy(comp_list)
+    compare_generation_accuracy(comp_list)
         
 if __name__ == '__main__':
-    group5_call()
-    # mask_detection()
+    # group5_call()
+    test_list = [
+        # 0,
+        1,
+        # 2,
+        # 3,
+        # 4,
+        # 5,
+        # 6,
+        # 7,
+        # 8,
+        # 9,
+        # 10,
+        # 11,
+        # 12,
+        # 13,
+        # 14,
+        # 15,
+        # 16,
+        # 17,
+        # 18,
+        # 19,
+        # 20,
+    ]
+    mask_detection(test_list, True)
 
 
 

@@ -1,7 +1,11 @@
 import cv2
 import mayavi.mlab as mlab
 import numpy as np
-
+import open3d
+from matplotlib.collections import PatchCollection
+from matplotlib.patches import Polygon
+from matplotlib import patches
+from matplotlib import pyplot as plt
 
 class Box3D(object):
     """
@@ -185,6 +189,93 @@ def read_calib_file(filepath):
 
     return data
 
+def remove_extra_coco_detections(bbox, segmentation, label):
+    CLASSES = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
+               'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
+               'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',
+               'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',
+               'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
+               'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',
+               'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
+               'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
+               'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',
+               'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
+               'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
+               'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
+               'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
+               'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
+    indices = np.argwhere((label == CLASSES.index('person')) | (label == CLASSES.index('car')) | (label == CLASSES.index('motorcycle')) | (label == CLASSES.index('bus')) | (label == CLASSES.index('truck'))).flatten()
+    removed_bbox = bbox[indices]
+    removed_segmentation = segmentation[indices]
+    removed_label = label[indices]
+    
+    return removed_bbox, removed_segmentation, removed_label
+
+def load_kitti_groundtruth(file_num = 0):
+    calibs = []
+    images = []
+    labels = []
+    pointclouds = []
+    if isinstance(file_num, int):
+        try:
+            calibs = read_calib_file(f'kitti_groundtruth/calib/{str(file_num).zfill(6)}.txt')
+            images = cv2.cvtColor(cv2.imread(f'kitti_groundtruth/image_2/{str(file_num).zfill(6)}.png'), cv2.COLOR_BGR2RGB)
+            labels = load_label(f'kitti_groundtruth/label_2/{str(file_num).zfill(6)}.txt')
+            pointclouds = load_velo_scan(f'kitti_groundtruth/velodyne/{str(file_num).zfill(6)}.bin')[:, :3]
+        except:
+            print(f'Error loading inference artifacts for scene {str(file_num).zfill(6)}')
+    elif isinstance(file_num, list):
+        for i, num in enumerate(file_num):
+            try:
+                calibs.append(read_calib_file(f'kitti_groundtruth/calib/{str(num).zfill(6)}.txt'))
+                images.append(cv2.cvtColor(cv2.imread(f'kitti_groundtruth/image_2/{str(num).zfill(6)}.png'), cv2.COLOR_BGR2RGB))
+                labels.append(load_label(f'kitti_groundtruth/label_2/{str(num).zfill(6)}.txt'))
+                pointclouds.append(load_velo_scan(f'kitti_groundtruth/velodyne/{str(num).zfill(6)}.bin')[:, :3])
+            except:
+                print(f'Error loading inference artifacts for scene {str(num).zfill(6)}')
+
+    return images, pointclouds, labels, calibs
+
+def load_mask_rcnn_inference(file_num = 0):
+    bboxes = []
+    images = []
+    labels = []
+    segmentations = []
+    if isinstance(file_num, int):
+        try:
+            bboxes = np.load(f'mask_rcnn_inference/bboxes/bboxes_kitti_{str(file_num).zfill(6)}.npy')
+            images = cv2.cvtColor(cv2.imread(f'mask_rcnn_inference/image/inference_test-kitti_{str(file_num).zfill(6)}.png'), cv2.COLOR_BGR2RGB)
+            labels = np.load(f'mask_rcnn_inference/labels/labels_kitti_{str(file_num).zfill(6)}.npy')
+            segmentations = np.load(f'mask_rcnn_inference/segmentation/segmentation_kitti_{str(file_num).zfill(6)}.npy')
+            
+            bboxes, segmentations, labels = remove_extra_coco_detections(bboxes, segmentations, labels)
+            
+        except Exception as e:
+            print(f'Error loading inference artifacts for scene {str(file_num).zfill(6)}')
+            print(e)
+            quit()
+            
+    elif isinstance(file_num, list):
+        for i, num in enumerate(file_num):
+            try:
+                bbox = np.load(f'mask_rcnn_inference/bboxes/bboxes_kitti_{str(num).zfill(6)}.npy')
+                image = cv2.cvtColor(cv2.imread(f'mask_rcnn_inference/image/inference_test-kitti_{str(num).zfill(6)}.png'), cv2.COLOR_BGR2RGB)
+                label = np.load(f'mask_rcnn_inference/labels/labels_kitti_{str(num).zfill(6)}.npy')
+                segmentation = np.load(f'mask_rcnn_inference/segmentation/segmentation_kitti_{str(num).zfill(6)}.npy')
+                
+                bbox, segmentation, label = remove_extra_coco_detections(bbox, segmentation, label)
+                
+                bboxes.append(bbox)
+                images.append(image)
+                labels.append(label)
+                segmentations.append(segmentation)
+                
+            except Exception as e:
+                print(f'Error loading inference artifacts for scene {str(num).zfill(6)}')
+                print(e)
+                quit()
+
+    return images, bboxes, segmentations, labels
 
 def roty(t):
     """
@@ -271,3 +362,145 @@ def get_bias_color(base, max_dist=30):
     new_color = base + np.random.randint(
         low=-max_dist, high=max_dist + 1, size=3)
     return np.clip(new_color, 0, 255, new_color)
+
+
+# =========================================================
+# Mask 3D object detection
+# =========================================================
+def generate_3d_bb(pcd_list, oriented=False, visualize=True):
+    """
+    Generates bounding boxes around each point cloud in pcd_list
+    """
+    generated_bb_list = []
+    for pcd in pcd_list:
+        if np.max(np.array(pcd.colors)) > 0:
+            bb = pcd.get_axis_aligned_bounding_box() if not oriented else pcd.get_oriented_bounding_box()
+            bb.color = [1.0, 0, 0]
+            generated_bb_list.append(bb)
+        
+    display_list = pcd_list + generated_bb_list
+        
+    if visualize:
+        open3d.visualization.draw_geometries(display_list)
+        
+    return generated_bb_list
+
+def get_groundtruth_3d_bb(objects, calib, oriented = False):
+    """
+    Gets the ground truth bounding boxes provided in objects
+    """
+    # Projection matrix
+    proj_cam2_2_velo = project_cam2_to_velo(calib)
+
+    bb_list = []
+
+    # Draw objects on lidar
+    for obj in objects:
+        if obj.type == 'DontCare':
+            continue
+
+        # Project boxes from camera to lidar coordinate
+        boxes3d_pts = project_camera_to_lidar(obj.in_camera_coordinate(), proj_cam2_2_velo)
+
+        # Open3d boxes
+        boxes3d_pts = open3d.utility.Vector3dVector(boxes3d_pts.T)
+        box = open3d.geometry.OrientedBoundingBox.create_from_points(boxes3d_pts) if oriented else open3d.geometry.AxisAlignedBoundingBox.create_from_points(boxes3d_pts)
+        box.color = [0, 1.0, 0]
+        bb_list.append(box)
+    
+    return bb_list
+
+def get_groundtruth_2d_bb():
+    # manually chosen bounding boxes in form [topleft x/y, topright x/y, bottomleft x /y, bottomright x/y]
+    # bb 1 (leftmost minivan):                          
+    bb1 = [(185, 183), (300, 183), (185, 240), (300, 240)]
+    # bb 2 (person next to traffic light in median):    
+    bb2 = [(442, 167), (474, 167), (442, 255), (474, 255)]
+    # bb 3 (car in middle of image):                    
+    bb3 = [(589, 189), (668, 189), (589, 252), (668, 252)]
+    # bb 4 (pedestrian with bike):                      
+    bb4 = [(905, 173), (996, 173), (905, 267), (996, 267)]
+    # bb5 farthest parked car
+    bb5 = [(519, 179), (573, 179), (519, 200), (573, 200)]
+    bb_list = [bb1, bb2, bb3, bb4, bb5]   
+    
+    return bb_list
+
+def get_detector_2d_bb(mask_bboxes, image = None, visualize=True):    
+    # print('MASK BOXES\n', mask_bboxes)
+    bb_list = []
+    for bb in mask_bboxes:
+        bb_list.append([(bb[0], bb[1]), (bb[2], bb[1]), (bb[0], bb[3]), (bb[2], bb[3])])
+        
+    if visualize:
+        fig, ax = plt.subplots(1, 1, figsize=(5,5))
+        ax.imshow(image) if image is not None else None
+        for bb in bb_list:
+            # print(bb)
+            ax.add_patch(patches.Rectangle(bb[0], bb[1][0]-bb[0][0], bb[2][1]-bb[1][1], fill=None))
+        
+        plt.show()
+        
+    return bb_list
+
+def get_bb_centers(bb):
+    """
+    bb: Open3D bounding box
+    
+    returns a numpy array with six coordinates of different cntres of the faces of the bounding box 
+    """
+
+    bb_c = bb.get_center()
+
+    # returns the eight bounding box coordinates of the corners; not used anywhere
+    bb_coord = bb.get_box_points()
+
+    # returns the length, breadth and height divided by 2 of the bounding box 
+    half_extent = bb.get_half_extent()
+
+    # empty numpy array initializaion 
+    arr = np.empty((0,3), int)
+
+    # formula used to calculate the centres of the six faces is = centroid +/- (lenghth/2 or breadth/2 or height/2)
+    arr = np.append(arr, np.array([[bb_c[0] + half_extent[0], bb_c[1], bb_c[2]]]), axis=0)
+    arr = np.append(arr, np.array([[bb_c[0] - half_extent[0], bb_c[1], bb_c[2]]]), axis=0)
+
+    arr = np.append(arr, np.array([[bb_c[0], bb_c[1] + half_extent[1], bb_c[2]]]), axis=0)
+    arr = np.append(arr, np.array([[bb_c[0], bb_c[1] - half_extent[1], bb_c[2]]]), axis=0)
+
+    arr = np.append(arr, np.array([[bb_c[0], bb_c[1], bb_c[2] + half_extent[2]]]), axis=0)
+    arr = np.append(arr, np.array([[bb_c[0], bb_c[1], bb_c[2] - half_extent[2]]]), axis=0)
+
+    return arr
+
+def get_closest_bb_center(bb_centers):
+    pass
+
+def draw_masks(img, masks, color = None, with_edge = True, alpha = 0.8):
+    fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+    ax.imshow(img)
+    
+    taken_colors = set([0, 0, 0])
+    if color is None:
+        random_colors = np.random.randint(0, 255, (masks.shape[0], 3))
+        color = [tuple(c) for c in random_colors]
+        color = np.array(color, dtype=np.uint8)
+    polygons = []
+    for i, mask in enumerate(masks):
+        if with_edge:
+            contours, _ = bitmap_to_polygon(mask)
+            polygons += [Polygon(c) for c in contours]
+
+        color_mask = color[i]
+        while tuple(color_mask) in taken_colors:
+            color_mask = get_bias_color(color_mask)
+        taken_colors.add(tuple(color_mask))
+
+        mask = mask.astype(bool)
+        img[mask] = img[mask] * (1 - alpha) + color_mask * alpha
+
+    p = PatchCollection(
+        polygons, facecolor='none', edgecolors='w', linewidths=1, alpha=0.8)
+    ax.add_collection(p)
+        
+    plt.show()
