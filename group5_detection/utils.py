@@ -6,6 +6,7 @@ from matplotlib.collections import PatchCollection
 from matplotlib.patches import Polygon
 from matplotlib import patches
 from matplotlib import pyplot as plt
+import multiprocessing as mp
 
 class Box3D(object):
     """
@@ -500,7 +501,7 @@ def draw_masks(img, masks, color = None, with_edge = True, alpha = 0.8):
         img[mask] = img[mask] * (1 - alpha) + color_mask * alpha
 
     p = PatchCollection(
-        polygons, facecolor='none', edgecolors='w', linewidths=1, alpha=0.8)
+        polygons, edgecolors='w', linewidths=1, alpha=0.8)
     ax.add_collection(p)
         
     plt.show()

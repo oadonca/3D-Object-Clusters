@@ -1,6 +1,5 @@
-def func():
-    return 1, 2
+import numpy as np
+x = np.array([True, False, True])
+y = np.array([1, 1, 1])
 
-x = func()
-
-print(x)
+print(x * y)
