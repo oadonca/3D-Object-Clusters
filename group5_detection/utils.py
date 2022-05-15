@@ -402,7 +402,7 @@ def get_groundtruth_3d_bb(objects, calib, oriented = False):
 
         # Project boxes from camera to lidar coordinate
         boxes3d_pts = project_camera_to_lidar(obj.in_camera_coordinate(), proj_cam2_2_velo)
-
+        print(boxes3d_pts.shape)
         # Open3d boxes
         boxes3d_pts = open3d.utility.Vector3dVector(boxes3d_pts.T)
         box = open3d.geometry.OrientedBoundingBox.create_from_points(boxes3d_pts) if oriented else open3d.geometry.AxisAlignedBoundingBox.create_from_points(boxes3d_pts)
