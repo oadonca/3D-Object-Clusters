@@ -1,0 +1,5 @@
+.env
+./group5_detection/kitti_groundtruth
+./group5_detection/mask_rcnn_inference
+*.png
+*test.py

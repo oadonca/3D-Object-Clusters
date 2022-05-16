@@ -7,6 +7,8 @@ from matplotlib.patches import Polygon
 from matplotlib import patches
 from matplotlib import pyplot as plt
 import multiprocessing as mp
+import time
+import json
 
 class Box3D(object):
     """
@@ -62,6 +64,13 @@ class Box3D(object):
 
         return points_3d
 
+class DetectionEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, open3d.geometry.AxisAlignedBoundingBox):
+            return np.asarray(obj.get_box_points()).tolist()
+        return json.JSONEncoder.default(self, obj)
 
 # =========================================================
 # Projections
@@ -190,6 +199,47 @@ def read_calib_file(filepath):
 
     return data
 
+def kitti_coco_class_mapping(cls, transform=0):
+    COCO_CLASSES = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
+               'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
+               'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',
+               'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',
+               'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
+               'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',
+               'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
+               'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
+               'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',
+               'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
+               'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
+               'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
+               'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
+               'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
+    KITTI_CLASSES = ['Car', 'Van', 'Truck',
+                     'Pedestrian', 'Person_sitting', 'Cyclist', 'Tram',
+                     'Misc', 'DontCare']
+
+    KITTI_TO_COCO = {'Car': ['car', 'bus', 'truck'], 'Van': ['car', 'bus', 'truck', 'train'], 'Truck': ['car', 'bus', 'truck', 'train'], 'Pedestrian': ['person'], 'Person_sitting': ['person'], 'Cyclist': ['person'], 'Tram': ['car', 'bus', 'truck', 'train'], 'Misc': COCO_CLASSES}
+    
+    return KITTI_TO_COCO[cls]
+
+def get_coco_class(class_idx):
+    CLASSES = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
+               'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
+               'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',
+               'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',
+               'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
+               'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',
+               'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
+               'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
+               'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',
+               'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
+               'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
+               'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
+               'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
+               'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
+
+    return CLASSES[class_idx]
+
 def remove_extra_coco_detections(bbox, segmentation, label):
     CLASSES = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
                'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
@@ -205,7 +255,7 @@ def remove_extra_coco_detections(bbox, segmentation, label):
                'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
                'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
                'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
-    indices = np.argwhere((label == CLASSES.index('person')) | (label == CLASSES.index('car')) | (label == CLASSES.index('motorcycle')) | (label == CLASSES.index('bus')) | (label == CLASSES.index('truck'))).flatten()
+    indices = np.argwhere((label == CLASSES.index('person')) | (label == CLASSES.index('car')) | (label == CLASSES.index('bus')) | (label == CLASSES.index('truck')) | (label == CLASSES.index('train'))).flatten()
     removed_bbox = bbox[indices]
     removed_segmentation = segmentation[indices]
     removed_label = label[indices]
@@ -288,15 +338,15 @@ def roty(t):
                      [0, 1, 0],
                      [-s, 0, c]])
     
-def within_bb_indices(bb_list, points):
+def within_bb_indices(detections, points):
     """
     Returns an list of lists of indices for each bounding box
     """
     inds = []
     
-    for bb in bb_list:
-        x_range = [bb[0][0], bb[1][0]]
-        y_range = [bb[0][1], bb[2][1]]
+    for detection in detections:
+        x_range = [detection['bb'][0][0], detection['bb'][1][0]]
+        y_range = [detection['bb'][0][1], detection['bb'][2][1]]
         inds.append(np.where((points[0, :] < x_range[1]) & (points[0, :] >= x_range[0]) &
                         (points[1, :] < y_range[1]) & (points[1, :] >= y_range[0])
                         )[0])
@@ -368,24 +418,6 @@ def get_bias_color(base, max_dist=30):
 # =========================================================
 # Mask 3D object detection
 # =========================================================
-def generate_3d_bb(pcd_list, oriented=False, visualize=True):
-    """
-    Generates bounding boxes around each point cloud in pcd_list
-    """
-    generated_bb_list = []
-    for pcd in pcd_list:
-        if np.max(np.array(pcd.colors)) > 0:
-            bb = pcd.get_axis_aligned_bounding_box() if not oriented else pcd.get_oriented_bounding_box()
-            bb.color = [1.0, 0, 0]
-            generated_bb_list.append(bb)
-        
-    display_list = pcd_list + generated_bb_list
-        
-    if visualize:
-        open3d.visualization.draw_geometries(display_list)
-        
-    return generated_bb_list
-
 def get_groundtruth_3d_bb(objects, calib, oriented = False):
     """
     Gets the ground truth bounding boxes provided in objects
@@ -402,7 +434,6 @@ def get_groundtruth_3d_bb(objects, calib, oriented = False):
 
         # Project boxes from camera to lidar coordinate
         boxes3d_pts = project_camera_to_lidar(obj.in_camera_coordinate(), proj_cam2_2_velo)
-        print(boxes3d_pts.shape)
         # Open3d boxes
         boxes3d_pts = open3d.utility.Vector3dVector(boxes3d_pts.T)
         box = open3d.geometry.OrientedBoundingBox.create_from_points(boxes3d_pts) if oriented else open3d.geometry.AxisAlignedBoundingBox.create_from_points(boxes3d_pts)
@@ -505,3 +536,9 @@ def draw_masks(img, masks, color = None, with_edge = True, alpha = 0.8):
     ax.add_collection(p)
         
     plt.show()
+
+def time_function(function, args = (), kwargs = {}):
+    start = time.perf_counter()
+    func_return = function(*args, **kwargs)
+    end = time.perf_counter() - start
+    return func_return, end
