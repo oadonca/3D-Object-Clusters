@@ -68,7 +68,7 @@ class DetectionEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
-        elif isinstance(obj, open3d.geometry.AxisAlignedBoundingBox):
+        elif isinstance(obj, open3d.geometry.AxisAlignedBoundingBox) or isinstance(obj, open3d.geometry.OrientedBoundingBox):
             return np.asarray(obj.get_box_points()).tolist()
         return json.JSONEncoder.default(self, obj)
 
@@ -418,7 +418,7 @@ def get_bias_color(base, max_dist=30):
 # =========================================================
 # Mask 3D object detection
 # =========================================================
-def get_groundtruth_3d_bb(objects, calib, oriented = False):
+def get_groundtruth_3d_bb(objects, calib, oriented = True):
     """
     Gets the ground truth bounding boxes provided in objects
     """
@@ -482,13 +482,15 @@ def get_bb_centers(bb):
     returns a numpy array with six coordinates of different cntres of the faces of the bounding box 
     """
 
-    bb_c = bb.get_center()
+    bb_axis_aligned = bb.get_axis_aligned_bounding_box()
+
+    bb_c = bb_axis_aligned.get_center()
 
     # returns the eight bounding box coordinates of the corners; not used anywhere
-    bb_coord = bb.get_box_points()
+    bb_coord = bb_axis_aligned.get_box_points()
 
     # returns the length, breadth and height divided by 2 of the bounding box 
-    half_extent = bb.get_half_extent()
+    half_extent = bb_axis_aligned.get_half_extent()
 
     # empty numpy array initializaion 
     arr = np.empty((0,3), int)
@@ -504,9 +506,6 @@ def get_bb_centers(bb):
     arr = np.append(arr, np.array([[bb_c[0], bb_c[1], bb_c[2] - half_extent[2]]]), axis=0)
 
     return arr
-
-def get_closest_bb_center(bb_centers):
-    pass
 
 def draw_masks(img, masks, color = None, with_edge = True, alpha = 0.8):
     fig, ax = plt.subplots(1, 1, figsize=(10, 5))
@@ -542,3 +541,56 @@ def time_function(function, args = (), kwargs = {}):
     func_return = function(*args, **kwargs)
     end = time.perf_counter() - start
     return func_return, end
+
+def get_ab3dmot_format(detection_info):
+    # detection keys: class, bb, mask, frustum_pcd, object_candidate_cluster, generated_3d_bb
+    frame_input = list()
+    for i, detection in enumerate(detection_info):
+        if 'generated_3d_bb' in detection.keys() and detection['generated_3d_bb'] is not None:
+            detection_input = dict()
+            # Frame number
+            detection_input['frame'] = detection['frame']
+            
+            # Detection type/class
+            if get_coco_class(detection['class']) in ['car', 'bus', 'truck', 'train']:
+                detection_input['type'] = 2
+            elif get_coco_class(detection['class']) in ['person']:
+                detection_input['type'] = 0
+                
+            # 2D bounding box top left and bottom right coordinates
+            detection_input['2d_bb'] = [detection['bb'][0][0], detection['bb'][0][1], detection['bb'][3][0], detection['bb'][3][1]]
+            
+            # Detection confidence
+            detection_input['score'] = .5
+
+            # 3D bounding box: height, width, length, x, y, z, rot_y
+            bb_3d = detection['generated_3d_bb']
+            if not isinstance(bb_3d, open3d.geometry.AxisAlignedBoundingBox):
+                bb_3d = bb_3d.get_axis_aligned_bounding_box()
+                
+            bb_center = bb_3d.get_center()
+            bb_half_extents = bb_3d.get_half_extent()
+            
+            front = np.array([bb_center[0] + bb_half_extents[0], bb_center[1], bb_center[2]])
+            back = np.array([bb_center[0] - bb_half_extents[0], bb_center[1], bb_center[2]])
+            
+            direction_vector = front - back
+            rot_z = np.arctan2(direction_vector[1], direction_vector[0])
+            
+            detection_input['3d_bb'] = [2*bb_half_extents[2], 2*bb_half_extents[1], 2*bb_half_extents[0], bb_center[0], bb_center[1], bb_center[2], rot_z]
+            
+            # Alpha, viewing angle
+            detection_input['alpha'] = np.arctan2(bb_center[1], bb_center[0])
+            
+            final_input = []
+            for val in detection_input.values():
+                if isinstance(val, list):
+                    final_input.extend(val)
+                else:
+                    final_input.append(val)
+            
+            detection_info[i]['ab3dmot_format'] = final_input
+            frame_input.append(final_input)
+        
+    return frame_input
+    

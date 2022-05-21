@@ -547,15 +547,14 @@ def compare_generation_accuracy(comp_list, visualize=True):
         if visualize:
             open3d.visualization.draw_geometries(comp + [pointcloud_center, generated_center, groundtruth_center])
 
-# Given a point cloud, 2d boudning boxes, 2d masks, labels
-def run_detection(calib, image, pcd, detection_list, labels, use_vis = False, ground_removal = False):
+def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, ground_removal = True):
     """
     Runs 3D object detection 
 
     calib: KITTI calibration file
     image: image corresponding to the scene
     pcd: pointcloud corresponding to the scene
-    detection_list: list of dictionaries containing detection results, each dict contians a 2d bounding box and 2d mask
+    detection_info: list of dictionaries containing detection results, each dict contians a 2d bounding box and 2d mask, later will be modified to contain frustum pcd, object candidate cluster, and generated 3d bb
     labels: dictionary of label/groundtruth information
     use_vis: use visualizations
     """
@@ -585,7 +584,7 @@ def run_detection(calib, image, pcd, detection_list, labels, use_vis = False, gr
     # SEGMENT FRUSTUMS 
     #############################################################################
 
-    segmented_pcds, metrics['frustum_segmentation_time'] = time_function(segment_bb_frustum_from_projected_pcd, (detection_list, projected_pcd_points, projected_pcd_grid, calib), {'labels': labels['kitti_gt_3d_bb'], 'visualize': use_vis, 'orig_img': image})
+    segmented_pcds, metrics['frustum_segmentation_time'] = time_function(segment_bb_frustum_from_projected_pcd, (detection_info, projected_pcd_points, projected_pcd_grid, calib), {'labels': labels['kitti_gt_3d_bb'], 'visualize': use_vis, 'orig_img': image})
     
     metrics['total_time'] += metrics['frustum_segmentation_time']
 
@@ -597,14 +596,14 @@ def run_detection(calib, image, pcd, detection_list, labels, use_vis = False, gr
     metrics['dbscan_clustering_time'] = 0
 
     for i, segmented_pcd in enumerate(segmented_pcds):
-        if detection_list[i]['frustum_pcd'] is not None:
+        if detection_info[i]['frustum_pcd'] is not None:
             object_candidate_cluster, execution_time = time_function(apply_dbscan, (segmented_pcd,), {'keep_n': 1, 'visualize': False})
             object_candidate_clusters.extend(object_candidate_cluster)
-            detection_list[i]['object_candidate_cluster'] = object_candidate_cluster
+            detection_info[i]['object_candidate_cluster'] = object_candidate_cluster
 
             metrics['dbscan_clustering_time'] += execution_time
         else:
-            detection_list[i]['object_candidate_cluster'] = None
+            detection_info[i]['object_candidate_cluster'] = None
     
     metrics['total_time'] += metrics['dbscan_clustering_time']
 
@@ -612,7 +611,7 @@ def run_detection(calib, image, pcd, detection_list, labels, use_vis = False, gr
     # GENERATE 3D BOUNDING BOXES 
     #############################################################################
 
-    generated_3d_bb_list, metrics['3d_bounding_box_generation_time'] = time_function(generate_3d_bb, (object_candidate_clusters, detection_list), {'visualize': use_vis})
+    generated_3d_bb_list, metrics['3d_bounding_box_generation_time'] = time_function(generate_3d_bb, (object_candidate_clusters, detection_info), {'visualize': use_vis})
     
     metrics['total_time'] += metrics['3d_bounding_box_generation_time']
 
@@ -623,7 +622,7 @@ def run_detection(calib, image, pcd, detection_list, labels, use_vis = False, gr
     print(f'{"DBSCAN Clustering Time":<30}: {metrics["dbscan_clustering_time"]:.>5.4f} s.')
     print(f'{"Bounding Box Generation Time":<30}: {metrics["3d_bounding_box_generation_time"]:.>5.4f} s.')
 
-    return generated_3d_bb_list, object_candidate_clusters, detection_list, metrics
+    return generated_3d_bb_list, object_candidate_clusters, detection_info, metrics
 
 def test_kitti_scenes(file_num = 0, use_vis = False):
     run_files = [file_num] if not isinstance(file_num, list) else file_num
@@ -677,14 +676,21 @@ def test_kitti_scenes(file_num = 0, use_vis = False):
         # RUN DETECTION
         #############################################################################
         labels={'kitti_gt_3d_bb': kitti_gt_3d_bb, 'kitti_gt_labels': kitti_gt_labels}
-        mr_detections = [{'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
-        generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_list, detection_metrics = run_detection(kitti_gt_calib, kitti_gt_image, kitti_gt_pointcloud, mr_detections, labels, use_vis)
-    
+        mr_detections = [{'frame': file, 'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
+        
+        generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(kitti_gt_calib, kitti_gt_image, kitti_gt_pointcloud, mr_detections, labels, use_vis)
+        
+        
+        #############################################################################
+        # CONVERT TO AB3DMOT FORMAT
+        #############################################################################
+        frame_ab3dmot_format = get_ab3dmot_format(detection_info)
+        
 
         #############################################################################
         # VISUALIZE RESULTS FOR SCENE
         #############################################################################
-        if use_vis:
+        if True:
             mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
             open3d.visualization.draw_geometries(clustered_kitti_gt_pcd_list + kitti_gt_3d_bb + generated_3d_bb_list + [mesh_frame])
     
@@ -717,23 +723,24 @@ def test_kitti_scenes(file_num = 0, use_vis = False):
         # RUN ACCURACY ANALYSIS
         #############################################################################
         print(f'Starting Running file {str(file).zfill(6)} Detection Analysis')
-        analysis_metrics = detection_analysis(detection_list, labels)
+        analysis_metrics = detection_analysis(detection_info, labels)
         print(f'Finished Running file {str(file).zfill(6)} Detection Analysis')
 
         test_metrics[f'kitti_scene_{str(file).zfill(6)}_analysis_metrics'] = analysis_metrics
 
         print('='*50)
         
-    test_metrics["avg_individual_detection_time"] = test_metrics["avg_individual_detection_time"]/test_metrics["total_detections"]
+    test_metrics["avg_individual_detection_time"] = float(test_metrics["avg_individual_detection_time"])/test_metrics["total_detections"]
+    test_metrics["avg_scene_time"] = float(test_metrics["avg_scene_time"])/len(test_list)
 
     print('='*50)
     print(f'Overall Detection Inference Analysis')
     print('='*50)
     print(f'3D Object Detection {"Min Scene Inference Time":<40}: {test_metrics["min_scene_time"]:.>5.4f} s.')
-    print(f'3D Object Detection {"Avg Scene Inference Time":<40}: {test_metrics["avg_scene_time"]/len(test_list):.>5.4f} s.')
+    print(f'3D Object Detection {"Avg Scene Inference Time":<40}: {test_metrics["avg_scene_time"]:.>5.4f} s.')
     print(f'3D Object Detection {"Max Scene Inference Time":<40}: {test_metrics["max_scene_time"]:.>5.4f} s.')
     print(f'3D Object Detection {"Min Inference Time Per Detection":<40}: {test_metrics["min_individual_detection_time"]:.>5.4f} s.')
-    print(f'3D Object Detection {"Avg Inference Time Per Detection":<40}: {test_metrics["avg_individual_detection_time"]/test_metrics["total_detections"]:.>5.4f} s.')
+    print(f'3D Object Detection {"Avg Inference Time Per Detection":<40}: {float(test_metrics["avg_individual_detection_time"]):.>5.4f} s.')
     print(f'3D Object Detection {"Max Inference Time Per Detection":<40}: {test_metrics["max_individual_detection_time"]:.>5.4f} s.')
     
     json.dump(test_metrics, open('kitti_test_metrics.json', 'w'), cls=DetectionEncoder)
@@ -741,27 +748,27 @@ def test_kitti_scenes(file_num = 0, use_vis = False):
         
 if __name__ == '__main__':
     test_list = [
-        0,
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        8,
-        9,
-        10,
-        11,
-        12,
-        13,
-        14,
-        15,
-        16,
-        17,
-        18,
+        # 0,
+        # 1,
+        # 2,
+        # 3,
+        # 4,
+        # 5,
+        # 6,
+        # 7,
+        # 8,
+        # 9,
+        # 10,
+        # 11,
+        # 12,
+        # 13,
+        # 14,
+        # 15,
+        # 16,
+        # 17,
+        # 18,
         19,
-        20,
+        # 20,
     ]
     test_kitti_scenes(test_list, False)
 
