@@ -4,3 +4,4 @@ kitti_tracking
 ./group5_detection/mask_rcnn_inference
 *.png
 *test.py
+*.pyc
