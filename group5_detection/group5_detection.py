@@ -701,19 +701,27 @@ def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False):
             #############################################################################
             # CONVERT TO AB3DMOT FORMAT
             #############################################################################
-            frame_ab3dmot_format = get_ab3dmot_format(detection_info)
-            peds = list(filter(lambda line: line[1] == 0))
-            cyclists = list(filter(lambda line: line[1] == 1))
-            cars = list(filter(lambda line: line[1] == 2))
-            with open(f'../../AB3DMOT/data/KITTI/detection/maskrcnn_Pedestrian_test/{str(scene).zfill(4)}.txt', "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerows(peds)
-            with open(f'../../AB3DMOT/data/KITTI/detection/maskrcnn_Cyclists_test/{str(scene).zfill(4)}.txt', "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerows(cyclists)
-            with open(f'../../AB3DMOT/data/KITTI/detection/maskrcnn_Car_test/{str(scene).zfill(4)}.txt', "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerows(cars)
+            if tracking:
+                frame_ab3dmot_format = get_ab3dmot_format(detection_info)
+                peds = list(filter(lambda line: line[1] == 0))
+                for ped in peds:
+                    del ped[1]
+                cyclists = list(filter(lambda line: line[1] == 1))
+                for cyclist in cyclistss:
+                    del cyclist[1]
+                cars = list(filter(lambda line: line[1] == 2))
+                for car in cars:
+                    del car[1]
+
+                with open(f'../../AB3DMOT/data/KITTI/detection/maskrcnn_Pedestrian_test/{str(scene).zfill(4)}.txt', "w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerows(peds)
+                with open(f'../../AB3DMOT/data/KITTI/detection/maskrcnn_Cyclists_test/{str(scene).zfill(4)}.txt', "w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerows(cyclists)
+                with open(f'../../AB3DMOT/data/KITTI/detection/maskrcnn_Car_test/{str(scene).zfill(4)}.txt', "w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerows(cars)
                         
 
             #############################################################################
