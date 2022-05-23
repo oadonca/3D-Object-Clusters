@@ -12,6 +12,9 @@ from matplotlib.patches import Polygon
 from matplotlib import patches
 import multiprocessing as mp
 import json
+import argparse
+import csv
+
 
 from utils import *
 from iou3d import get_3d_box, box3d_iou
@@ -624,8 +627,21 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, gr
 
     return generated_3d_bb_list, object_candidate_clusters, detection_info, metrics
 
-def test_kitti_scenes(file_num = 0, use_vis = False):
-    run_files = [file_num] if not isinstance(file_num, list) else file_num
+def prepare_tracking_files(scene_list):
+    scene_dict = {}
+    for scene in scene_list:
+        files = os.listdir(f'kitti_tracking/testing/velodyne/{str(scene).zfill(4)}')
+        files = [int(os.path.splitext(file)[0]) for file in files]
+        scene_dict[str(scene)] = files
+    return scene_dict
+
+def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False):
+
+    if tracking:
+        scenes = prepare_tracking_files(file_num)
+    else:
+        scenes = {"None": file_num}
+
     
     # initialize metrics dict
     test_metrics = dict()
@@ -637,98 +653,111 @@ def test_kitti_scenes(file_num = 0, use_vis = False):
     test_metrics['avg_individual_detection_time'] = 0
     test_metrics['max_individual_detection_time'] = -float('inf')
 
-    for i, file in enumerate(run_files):
-        print('='*50)
-        print(f'Running File {str(file).zfill(6)}')
-        print(f'Starting File {str(file).zfill(6)} Object Detection')
+    for key in scenes:
+        for i, file in enumerate(scenes[key]):
+            print('='*50)
+            print(f'Running File {str(file).zfill(6)}')
+            print(f'Starting File {str(file).zfill(6)} Object Detection')
 
 
-        #############################################################################
-        # LOAD KITTI GROUNDTRUTH
-        #############################################################################
-        kitti_gt_image, kitti_gt_pointcloud, kitti_gt_labels, kitti_gt_calib = load_kitti_groundtruth(file)
+            #############################################################################
+            # LOAD KITTI GROUNDTRUTH
+            #############################################################################
+            kitti_gt_image, kitti_gt_pointcloud, kitti_gt_labels, kitti_gt_calib = load_kitti_groundtruth(file, key)
+            
+
+            #############################################################################
+            # LOAD MASK RCNN INFERENCE
+            #############################################################################
+            mr_inf_images, mr_inf_bboxes, mr_inf_segmentations, mr_inf_labels = load_mask_rcnn_inference(file)    
+            print(f'{"# MASK RCNN DETECTIONS: ":<30}: {len(mr_inf_labels):>5}.')
+            print(f'{"# KITTI GT LABELS: ":<30}: {len(kitti_gt_labels):>5}.\n\n')
+
+            if use_vis:
+                draw_masks(kitti_gt_image, mr_inf_segmentations)
+
+
+            #############################################################################
+            # GET KITTI GROUND TRUTH 3D BOUNDING BOXES
+            #############################################################################
+            kitti_gt_3d_bb = get_groundtruth_3d_bb(kitti_gt_labels, kitti_gt_calib)
+            
+
+            #############################################################################
+            # GET DETECTOR 2D BB LIST 
+            #############################################################################
+            mr_inf_2d_bb_list = get_detector_2d_bb(mr_inf_bboxes, kitti_gt_image, visualize=use_vis)  
+            
+            
+            #############################################################################
+            # RUN DETECTION
+            #############################################################################
+            labels={'kitti_gt_3d_bb': kitti_gt_3d_bb, 'kitti_gt_labels': kitti_gt_labels}
+            mr_detections = [{'frame': file, 'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
+            
+            generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(kitti_gt_calib, kitti_gt_image, kitti_gt_pointcloud, mr_detections, labels, use_vis)
+            
+            
+            #############################################################################
+            # CONVERT TO AB3DMOT FORMAT
+            #############################################################################
+            frame_ab3dmot_format = get_ab3dmot_format(detection_info)
+            peds = list(filter(lambda line: line[1] == 0))
+            cyclists = list(filter(lambda line: line[1] == 1))
+            cars = list(filter(lambda line: line[1] == 2))
+            with open(f'../../AB3DMOT/data/KITTI/detection/maskrcnn_Pedestrian_test/{str(scene).zfill(4)}.txt', "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerows(peds)
+            with open(f'../../AB3DMOT/data/KITTI/detection/maskrcnn_Cyclists_test/{str(scene).zfill(4)}.txt', "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerows(cyclists)
+            with open(f'../../AB3DMOT/data/KITTI/detection/maskrcnn_Car_test/{str(scene).zfill(4)}.txt', "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerows(cars)
+                        
+
+            #############################################################################
+            # VISUALIZE RESULTS FOR SCENE
+            #############################################################################
+            if True:
+                mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
+                open3d.visualization.draw_geometries(clustered_kitti_gt_pcd_list + kitti_gt_3d_bb + generated_3d_bb_list + [mesh_frame])
         
 
-        #############################################################################
-        # LOAD MASK RCNN INFERENCE
-        #############################################################################
-        mr_inf_images, mr_inf_bboxes, mr_inf_segmentations, mr_inf_labels = load_mask_rcnn_inference(file)    
-        print(f'{"# MASK RCNN DETECTIONS: ":<30}: {len(mr_inf_labels):>5}.')
-        print(f'{"# KITTI GT LABELS: ":<30}: {len(kitti_gt_labels):>5}.\n\n')
+            #############################################################################
+            # GET TEST METRICS
+            #############################################################################
+            if detection_metrics['total_time'] > test_metrics['max_scene_time']:
+                test_metrics['max_scene_time'] = detection_metrics['total_time']
+            if detection_metrics['total_time'] < test_metrics['min_scene_time']:
+                test_metrics['min_scene_time'] = detection_metrics['total_time']
+            test_metrics['avg_scene_time'] += detection_metrics['total_time']
+            
+            detection_metrics['avg_time_per_detection'] = detection_metrics['total_time']/len(mr_inf_labels)
+            if detection_metrics['avg_time_per_detection'] > test_metrics['max_individual_detection_time']:
+                test_metrics['max_individual_detection_time'] = detection_metrics['avg_time_per_detection']
+            if detection_metrics['avg_time_per_detection'] < test_metrics['min_individual_detection_time']:
+                test_metrics['min_individual_detection_time'] = detection_metrics['avg_time_per_detection']
+            test_metrics['avg_individual_detection_time'] += detection_metrics['avg_time_per_detection']
+            test_metrics['total_detections'] += len(mr_inf_labels)
 
-        if use_vis:
-            draw_masks(kitti_gt_image, mr_inf_segmentations)
+            test_metrics[f'kitti_scene_{str(file).zfill(6)}_inference_metrics'] = detection_metrics
 
-
-        #############################################################################
-        # GET KITTI GROUND TRUTH 3D BOUNDING BOXES
-        #############################################################################
-        kitti_gt_3d_bb = get_groundtruth_3d_bb(kitti_gt_labels, kitti_gt_calib)
-        
-
-        #############################################################################
-        # GET DETECTOR 2D BB LIST 
-        #############################################################################
-        mr_inf_2d_bb_list = get_detector_2d_bb(mr_inf_bboxes, kitti_gt_image, visualize=use_vis)  
-        
-        
-        #############################################################################
-        # RUN DETECTION
-        #############################################################################
-        labels={'kitti_gt_3d_bb': kitti_gt_3d_bb, 'kitti_gt_labels': kitti_gt_labels}
-        mr_detections = [{'frame': file, 'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
-        
-        generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(kitti_gt_calib, kitti_gt_image, kitti_gt_pointcloud, mr_detections, labels, use_vis)
-        
-        
-        #############################################################################
-        # CONVERT TO AB3DMOT FORMAT
-        #############################################################################
-        frame_ab3dmot_format = get_ab3dmot_format(detection_info)
-        
-
-        #############################################################################
-        # VISUALIZE RESULTS FOR SCENE
-        #############################################################################
-        if True:
-            mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
-            open3d.visualization.draw_geometries(clustered_kitti_gt_pcd_list + kitti_gt_3d_bb + generated_3d_bb_list + [mesh_frame])
-    
-
-        #############################################################################
-        # GET TEST METRICS
-        #############################################################################
-        if detection_metrics['total_time'] > test_metrics['max_scene_time']:
-            test_metrics['max_scene_time'] = detection_metrics['total_time']
-        if detection_metrics['total_time'] < test_metrics['min_scene_time']:
-            test_metrics['min_scene_time'] = detection_metrics['total_time']
-        test_metrics['avg_scene_time'] += detection_metrics['total_time']
-        
-        detection_metrics['avg_time_per_detection'] = detection_metrics['total_time']/len(mr_inf_labels)
-        if detection_metrics['avg_time_per_detection'] > test_metrics['max_individual_detection_time']:
-            test_metrics['max_individual_detection_time'] = detection_metrics['avg_time_per_detection']
-        if detection_metrics['avg_time_per_detection'] < test_metrics['min_individual_detection_time']:
-            test_metrics['min_individual_detection_time'] = detection_metrics['avg_time_per_detection']
-        test_metrics['avg_individual_detection_time'] += detection_metrics['avg_time_per_detection']
-        test_metrics['total_detections'] += len(mr_inf_labels)
-
-        test_metrics[f'kitti_scene_{str(file).zfill(6)}_inference_metrics'] = detection_metrics
-
-        print(f'\nFile {str(file).zfill(6)} Object Detection {"Total Execution Time":<40}: {detection_metrics["total_time"]:.>5.4f} s.')
-        print(f'File {str(file).zfill(6)} Object Detection {"Avg Inference Time/Detection":<40}: {detection_metrics["avg_time_per_detection"]:.>5.4f} s.')
-        print(f'Finished Running file {str(file).zfill(6)} Object Detection')
+            print(f'\nFile {str(file).zfill(6)} Object Detection {"Total Execution Time":<40}: {detection_metrics["total_time"]:.>5.4f} s.')
+            print(f'File {str(file).zfill(6)} Object Detection {"Avg Inference Time/Detection":<40}: {detection_metrics["avg_time_per_detection"]:.>5.4f} s.')
+            print(f'Finished Running file {str(file).zfill(6)} Object Detection')
 
 
-        #############################################################################
-        # RUN ACCURACY ANALYSIS
-        #############################################################################
-        print(f'Starting Running file {str(file).zfill(6)} Detection Analysis')
-        analysis_metrics = detection_analysis(detection_info, labels)
-        print(f'Finished Running file {str(file).zfill(6)} Detection Analysis')
+            #############################################################################
+            # RUN ACCURACY ANALYSIS
+            #############################################################################
+            print(f'Starting Running file {str(file).zfill(6)} Detection Analysis')
+            analysis_metrics = detection_analysis(detection_info, labels)
+            print(f'Finished Running file {str(file).zfill(6)} Detection Analysis')
 
-        test_metrics[f'kitti_scene_{str(file).zfill(6)}_analysis_metrics'] = analysis_metrics
+            test_metrics[f'kitti_scene_{str(file).zfill(6)}_analysis_metrics'] = analysis_metrics
 
-        print('='*50)
+            print('='*50)
         
     test_metrics["avg_individual_detection_time"] = float(test_metrics["avg_individual_detection_time"])/test_metrics["total_detections"]
     test_metrics["avg_scene_time"] = float(test_metrics["avg_scene_time"])/len(test_list)
@@ -747,6 +776,10 @@ def test_kitti_scenes(file_num = 0, use_vis = False):
 
         
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tracking", default=False, action="store_true")
+    parser.add_argument("--vis", default=False, action="store_true")
+    arguments = parser.parse_args()
     test_list = [
         # 0,
         # 1,
@@ -770,7 +803,7 @@ if __name__ == '__main__':
         19,
         # 20,
     ]
-    test_kitti_scenes(test_list, False)
+    test_kitti_scenes(test_list, arguments.vis, arguments.tracking)
 
 
 

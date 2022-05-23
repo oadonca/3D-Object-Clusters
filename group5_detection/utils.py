@@ -1,5 +1,5 @@
 import cv2
-import mayavi.mlab as mlab
+# import mayavi.mlab as mlab
 import numpy as np
 import open3d
 from matplotlib.collections import PatchCollection
@@ -262,28 +262,37 @@ def remove_extra_coco_detections(bbox, segmentation, label):
     
     return removed_bbox, removed_segmentation, removed_label
 
-def load_kitti_groundtruth(file_num = 0):
+def load_kitti_groundtruth(file_num = 0, scene = "None"):
     calibs = []
     images = []
     labels = []
     pointclouds = []
-    if isinstance(file_num, int):
-        try:
-            calibs = read_calib_file(f'kitti_groundtruth/calib/{str(file_num).zfill(6)}.txt')
-            images = cv2.cvtColor(cv2.imread(f'kitti_groundtruth/image_2/{str(file_num).zfill(6)}.png'), cv2.COLOR_BGR2RGB)
-            labels = load_label(f'kitti_groundtruth/label_2/{str(file_num).zfill(6)}.txt')
-            pointclouds = load_velo_scan(f'kitti_groundtruth/velodyne/{str(file_num).zfill(6)}.bin')[:, :3]
-        except:
-            print(f'Error loading inference artifacts for scene {str(file_num).zfill(6)}')
-    elif isinstance(file_num, list):
-        for i, num in enumerate(file_num):
+    if scene == "None":
+        if isinstance(file_num, int):
             try:
-                calibs.append(read_calib_file(f'kitti_groundtruth/calib/{str(num).zfill(6)}.txt'))
-                images.append(cv2.cvtColor(cv2.imread(f'kitti_groundtruth/image_2/{str(num).zfill(6)}.png'), cv2.COLOR_BGR2RGB))
-                labels.append(load_label(f'kitti_groundtruth/label_2/{str(num).zfill(6)}.txt'))
-                pointclouds.append(load_velo_scan(f'kitti_groundtruth/velodyne/{str(num).zfill(6)}.bin')[:, :3])
+                calibs = read_calib_file(f'kitti_groundtruth/calib/{str(file_num).zfill(6)}.txt')
+                images = cv2.cvtColor(cv2.imread(f'kitti_groundtruth/image_2/{str(file_num).zfill(6)}.png'), cv2.COLOR_BGR2RGB)
+                labels = load_label(f'kitti_groundtruth/label_2/{str(file_num).zfill(6)}.txt')
+                pointclouds = load_velo_scan(f'kitti_groundtruth/velodyne/{str(file_num).zfill(6)}.bin')[:, :3]
             except:
-                print(f'Error loading inference artifacts for scene {str(num).zfill(6)}')
+                print(f'Error loading inference artifacts for scene {str(file_num).zfill(6)}')
+        elif isinstance(file_num, list):
+            for i, num in enumerate(file_num):
+                try:
+                    calibs.append(read_calib_file(f'kitti_groundtruth/calib/{str(num).zfill(6)}.txt'))
+                    images.append(cv2.cvtColor(cv2.imread(f'kitti_groundtruth/image_2/{str(num).zfill(6)}.png'), cv2.COLOR_BGR2RGB))
+                    labels.append(load_label(f'kitti_groundtruth/label_2/{str(num).zfill(6)}.txt'))
+                    pointclouds.append(load_velo_scan(f'kitti_groundtruth/velodyne/{str(num).zfill(6)}.bin')[:, :3])
+                except:
+                    print(f'Error loading inference artifacts for scene {str(num).zfill(6)}')
+    else:
+        try:
+            calibs = read_calib_file(f'kitti_tracking/testing/calib/{str(scene).zfill(4)}.txt')
+            images = cv2.cvtColor(cv2.imread(f'kitti_tracking/testing/image_02/{str(scene).zfill(4)}/{str(file_num).zfill(6)}.png'), cv2.COLOR_BGR2RGB)
+            labels = load_label(f'kitti_tracking/testing/label_02/{str(scene).zfill(4)}.txt')
+            pointclouds = load_velo_scan(f'kitti_tracking/testing/velodyne/{str(scene).zfill(4)}/{str(file_num).zfill(6)}.bin')[:, :3]
+        except:
+            print(f'Error loading inference artifacts for scene {str(scene).zfill(4)} and file {str(file_num).zfill(6)}')
 
     return images, pointclouds, labels, calibs
 
