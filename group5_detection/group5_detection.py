@@ -265,22 +265,37 @@ def segment_bb_frustum_from_projected_pcd(detections, projected_points, projecte
     # inds = within_bb_indices(detections, projected_points/projected_points[2,:])
     
     # Non parallel
-    for i in range(len(detections)): 
-        if detections[i]['mask'] is not None:
+    for i, detection in enumerate(detections): 
+        # mask propagation
+        if 'mask' in detection.keys() and detection['mask'] is not None:
             # Get indicies where detection mask is true and projected points is non zero
-            mask_inds = np.where(((detections[i]['mask'][:, :] == True) & ((projected_grid[:,:,0] > 0) | (projected_grid[:,:,1] > 0) | (projected_grid[:,:,2] > 0))))
+            mask_inds = np.where(((detection['mask'][:, :] == True) & ((projected_grid[:,:,0] > 0) | (projected_grid[:,:,1] > 0) | (projected_grid[:,:,2] > 0))))
+            object_pts_2d = np.transpose(projected_grid[mask_inds])
 
-            # mask_bb_pts_2d = np.transpose(np.array([projected_grid[y, x] for (y,x) in zip(mask_inds[0], mask_inds[1]) if max(projected_grid[y, x]) != 0]))
-            mask_bb_pts_2d = np.transpose(projected_grid[mask_inds])
+        # bounding box
+        elif 'bb' in detection.keys() and detection['bb'] is not None:
+            # Bounding box indices
+            bb_offset = 5
+            y_start = int(detection['bb'][0][1])+bb_offset
+            y_end = int(detection['bb'][2][1])+1-bb_offset
+            x_start = int(detection['bb'][0][0])+bb_offset
+            x_end = int(detection['bb'][1][0])+1-bb_offset
 
-        if mask_bb_pts_2d.shape[0] == 3 and mask_bb_pts_2d.shape[1] > 0:
-            if visualize:
-                if mask_points_list is None:
-                    mask_points_list = mask_bb_pts_2d/mask_bb_pts_2d[2]
-                else:
-                    mask_points_list = np.append(mask_points_list, mask_bb_pts_2d/mask_bb_pts_2d[2], axis=1)
+            object_pts_2d = projected_grid[y_start:y_end, x_start:x_end]
+            object_pts_2d = np.transpose(np.reshape(object_pts_2d, (-1, 3)))
+            
+        else:
+            print('ERROR: no bounding box or mask detected')
+            raise NotImplementedError
+        
+        if object_pts_2d.shape[0] == 3 and object_pts_2d.shape[1] > 0:
+            # if visualize:
+            #     if mask_points_list is None:
+            #         mask_points_list = mask_bb_pts_2d/mask_bb_pts_2d[2]
+            #     else:
+            #         mask_points_list = np.append(mask_points_list, mask_bb_pts_2d/mask_bb_pts_2d[2], axis=1)
 
-            cam_coords = image_transform[:3, :3] @ mask_bb_pts_2d
+            cam_coords = image_transform[:3, :3] @ object_pts_2d
 
             # Get projection from camera coordinates to velodyne coordinates
             proj_mat = project_cam2_to_velo(calib)
@@ -363,23 +378,30 @@ def apply_dbscan(pointcloud, keep_n=None, visualize=True):
     """
     Applies DBSCAN on the provided point cloud and returns the Open3D point cloud
     """
+    
     # Create Open3D point cloud
+    start = time.perf_counter()
     pcd = open3d.geometry.PointCloud()
     pcd.points = open3d.utility.Vector3dVector(np.transpose(pointcloud))
-    
+    print(f'Creating Open3D Cloud: {time.perf_counter()-start}')
+        
     # Run DBSCAN on point cloud
     # with open3d.utility.VerbosityContextManager(open3d.utility.VerbosityLevel.Debug) as cm:
-    labels = np.array(pcd.cluster_dbscan(eps=.6, min_points=5))
+    start = time.perf_counter()
+    labels = np.array(pcd.cluster_dbscan(eps=.1, min_points=10))
+    print(f'DBSCAN CLUSTERING: {time.perf_counter()-start}')
 
     # Set colors of point cloud to see DBSCAN clusters
+    start = time.perf_counter()
     max_label = labels.max()
     # print(f"point cloud has {max_label + 1} clusters")
     colors = plt.get_cmap("tab20")(labels / (max_label if max_label > 0 else 1))
     colors[labels < 0] = 0
     pcd.colors = open3d.utility.Vector3dVector(colors[:, :3])
-    
     counts = collections.Counter(labels)
+    print(f'Getting Cluster Sizes: {time.perf_counter()-start}')
         
+    start = time.perf_counter()
     pcd_list = []
     if not keep_n:
         for label in range(labels.max()+1):
@@ -389,6 +411,8 @@ def apply_dbscan(pointcloud, keep_n=None, visualize=True):
         for label, count in counts.most_common(keep_n):
             if not label < 0:
                 pcd_list.append(pcd.select_by_index(np.argwhere(labels==label)))
+        
+    print(f'CHOOSING BEST CLUSTER: {time.perf_counter()-start}')
         
     if visualize:
         # Visualize
@@ -596,13 +620,16 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, gr
     metrics['dbscan_clustering_time'] = 0
 
     for i, segmented_pcd in enumerate(segmented_pcds):
+        print(f'DBSCAN Object {i+1}')
         if detection_info[i]['frustum_pcd'] is not None:
-            object_candidate_cluster, execution_time = time_function(apply_dbscan, (segmented_pcd,), {'keep_n': 1, 'visualize': False})
+            print('DBSCAN')
+            object_candidate_cluster, execution_time = time_function(apply_dbscan, (segmented_pcd,), {'keep_n': 1, 'visualize': True})
             object_candidate_clusters.extend(object_candidate_cluster)
             detection_info[i]['object_candidate_cluster'] = object_candidate_cluster
 
             metrics['dbscan_clustering_time'] += execution_time
         else:
+            print('No DBSCAN')
             detection_info[i]['object_candidate_cluster'] = None
     
     metrics['total_time'] += metrics['dbscan_clustering_time']
@@ -613,7 +640,7 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, gr
 
     generated_3d_bb_list, metrics['3d_bounding_box_generation_time'] = time_function(generate_3d_bb, (object_candidate_clusters, detection_info), {'visualize': use_vis})
     
-    metrics['total_time'] += metrics['3d_bounding_box_generation_time']
+    metrics['total_time'] += metrics['3d_bounding_box_generation_time'] 
 
     if 'ground_removal_time' in metrics.keys():
         print(f'{"Ground Removal Time":<30}: {metrics["ground_removal_time"]:.>5.4f} s.')
@@ -676,7 +703,8 @@ def test_kitti_scenes(file_num = 0, use_vis = False):
         # RUN DETECTION
         #############################################################################
         labels={'kitti_gt_3d_bb': kitti_gt_3d_bb, 'kitti_gt_labels': kitti_gt_labels}
-        mr_detections = [{'frame': file, 'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
+        # mr_detections = [{'frame': file, 'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
+        mr_detections = [{'frame': file, 'class': cls, 'bb': bb} for cls, bb in zip(mr_inf_labels, mr_inf_2d_bb_list)]
         
         generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(kitti_gt_calib, kitti_gt_image, kitti_gt_pointcloud, mr_detections, labels, use_vis)
         
@@ -685,7 +713,6 @@ def test_kitti_scenes(file_num = 0, use_vis = False):
         # CONVERT TO AB3DMOT FORMAT
         #############################################################################
         frame_ab3dmot_format = get_ab3dmot_format(detection_info)
-        
 
         #############################################################################
         # VISUALIZE RESULTS FOR SCENE
@@ -770,7 +797,7 @@ if __name__ == '__main__':
         19,
         # 20,
     ]
-    test_kitti_scenes(test_list, False)
+    test_kitti_scenes(test_list, use_vis=False)
 
 
 
