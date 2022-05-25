@@ -16,85 +16,6 @@ import json
 from utils import *
 from iou3d import get_3d_box, box3d_iou
 
-def render_image_with_boxes(img, objects, calib):
-    """
-    Show image with 3D boxes
-    """
-    # projection matrix
-    P_rect2cam2 = calib['P2'].reshape((3, 4))
-
-    img1 = np.copy(img)
-    for obj in objects:
-        if obj.type == 'DontCare':
-            continue
-        box3d_pixelcoord = map_box_to_image(obj, P_rect2cam2)
-        img1 = draw_projected_box3d(img1, box3d_pixelcoord)
-
-    plt.imshow(img1)
-    plt.yticks([])
-    plt.xticks([])
-    plt.show()
-
-
-def render_lidar_with_boxes(pc_velo, objects, calib, img_width, img_height, dbscan=False):
-    # projection matrix (project from velo2cam2)
-    proj_velo2cam2 = project_velo_to_cam2(calib)
-
-    # apply projection
-    pts_2d = project_to_image(pc_velo.transpose(), proj_velo2cam2)
-
-    # Filter lidar points to be within image FOV
-    inds = np.where((pts_2d[0, :] < img_width) & (pts_2d[0, :] >= 0) &
-                    (pts_2d[1, :] < img_height) & (pts_2d[1, :] >= 0) &
-                    (pc_velo[:, 0] > 0)
-                    )[0]
-    imgfov_pc_velo = pc_velo[inds, :]
-
-    # create open3d point cloud and axis
-    mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
-    pcd = open3d.geometry.PointCloud()
-    pcd.points = open3d.utility.Vector3dVector(imgfov_pc_velo)
-    
-    if dbscan:
-        # Run DBSCAN on point cloud
-        with open3d.utility.VerbosityContextManager(open3d.utility.VerbosityLevel.Debug) as cm:
-            labels = np.array(pcd.cluster_dbscan(eps=1, min_points=20, print_progress=True))
-
-        # Set colors of point cloud to see DBSCAN clusters
-        max_label = labels.max()
-        print(f"point cloud has {max_label + 1} clusters")
-        colors = plt.get_cmap("tab20")(labels / (max_label if max_label > 0 else 1))
-        colors[labels < 0] = 0
-        pcd.colors = open3d.utility.Vector3dVector(colors[:, :3])
-    
-    entities_to_draw = [pcd, mesh_frame]
-
-    # Projection matrix
-    proj_cam2_2_velo = project_cam2_to_velo(calib)
-
-    # Draw objects on lidar
-    for obj in objects:
-        if obj.type == 'DontCare':
-            continue
-
-        # Project boxes from camera to lidar coordinate
-        boxes3d_pts = project_camera_to_lidar(obj.in_camera_coordinate(), proj_cam2_2_velo)
-
-        # Open3d boxes
-        boxes3d_pts = open3d.utility.Vector3dVector(boxes3d_pts.T)
-        box = open3d.geometry.OrientedBoundingBox.create_from_points(boxes3d_pts)
-        box.color = [1, 0, 0]
-        entities_to_draw.append(box)
-
-    # Draw
-    open3d.visualization.draw_geometries([*entities_to_draw],
-                                         front=[-0.9945, 0.03873, 0.0970],
-                                         lookat=[38.4120, 0.6139, 0.48500],
-                                         up=[0.095457, -0.0421, 0.99453],
-                                         zoom=0.33799
-                                         )
-
-
 def render_lidar_on_image(pts_velo, orig_img, calib, img_width, img_height, depth_limit = 40, visualize=True):
     """
     Projects the given lidar points onto the given image using the projection/transformation matrices provided in calib
@@ -160,96 +81,6 @@ def render_lidar_on_image(pts_velo, orig_img, calib, img_width, img_height, dept
         
     return imgfov_pc_cam2, projected_grid
 
-def render_pointcloud_from_projection(image, projected_points, calib, image_width, image_height):
-    # Get image to cam 2 frame transform
-    image_transform = project_image_to_cam2(calib)
-    
-    # Apply back-projection: K_inv @ pixels * depth
-    # doing it this way because it is the same process if you just have the projected lidar point x,y and then depth value
-    #   (projected_points/projected_points[2, :]) = homogenous coordinates -> N count of [x, y, 1] points
-    #   projected_points[2, :] = depth value
-    cam_coords = image_transform[:3, :3] @ (projected_points/projected_points[2, :]) * projected_points[2, :]
-
-    # Get projection from camera coordinates to velodyne coordinates
-    proj_mat = project_cam2_to_velo(calib)
-    
-    # apply projection
-    velo_points = project_camera_to_lidar(cam_coords, proj_mat)
-    print('2D to 3D VELO POINTS: ', velo_points.shape)
-    
-    # Visualize
-    pcd = open3d.geometry.PointCloud()
-    pcd.points = open3d.utility.Vector3dVector(np.transpose(velo_points))
-    open3d.visualization.draw_geometries([pcd],
-                                         front=[-0.9945, 0.03873, 0.0970],
-                                         lookat=[38.4120, 0.6139, 0.48500],
-                                         up=[0.095457, -0.0421, 0.99453],
-                                         zoom=0.33799
-                                         )
-    return velo_points
-    
-def render_pointcloud_from_bb_segmentation(image, projected_points, calib, image_width, image_height):
-    # manually chosen bounding boxes in form [topleft x/y, topright x/y, bottomleft x/y, bottomright x/y]
-    # bb 1 (leftmost minivan):                          
-    bb1 = [(185, 183), (300, 183), (185, 240), (300, 240)]
-    # bb 2 (person next to traffic light in median):    
-    bb2 = [(442, 167), (474, 167), (442, 255), (474, 255)]
-    # bb 3 (car in middle of image):                    
-    bb3 = [(589, 189), (668, 189), (589, 252), (668, 252)]
-    # bb 4 (pedestrian with bike):                      
-    bb4 = [(905, 173), (996, 173), (905, 267), (996, 267)]
-    bb_list = [bb1, bb2, bb3, bb4]    
-    # bb_list = [bb3]
-
-    # Get image to cam 2 frame transform
-    image_transform = project_image_to_cam2(calib)
-    
-    pts_2d = projected_points/projected_points[2, :]
-    
-    # Get only the points within bounding boxes
-    bb_inds = within_bb_indices(bb_list, pts_2d)
-    inds = []
-    for idx in bb_inds:
-        inds.extend(idx)
-    
-    bb_pts_2d = pts_2d[:, inds]
-    
-    # Apply back-projection: K_inv @ pixels * depth
-    # doing it this way because it is the same process if you just have the projected lidar point x,y and then depth value
-    #   (projected_points/projected_points[2, :]) = homogenous coordinates -> N count of [x, y, 1] points
-    #   projected_points[2, :] = depth value
-    cam_coords = image_transform[:3, :3] @ bb_pts_2d * projected_points[2, inds]
-
-    # Get projection from camera coordinates to velodyne coordinates
-    proj_mat = project_cam2_to_velo(calib)
-    
-    # apply projection
-    velo_points = project_camera_to_lidar(cam_coords, proj_mat)
-    print('2D to 3D VELO POINTS: ', velo_points.shape)
-    
-    # Create Open3D point cloud
-    pcd = open3d.geometry.PointCloud()
-    pcd.points = open3d.utility.Vector3dVector(np.transpose(velo_points))
-    
-    # Run DBSCAN on point cloud
-    with open3d.utility.VerbosityContextManager(open3d.utility.VerbosityLevel.Debug) as cm:
-        labels = np.array(pcd.cluster_dbscan(eps=1, min_points=20, print_progress=True))
-
-    # Set colors of point cloud to see DBSCAN clusters
-    max_label = labels.max()
-    print(f"point cloud has {max_label + 1} clusters")
-    colors = plt.get_cmap("tab20")(labels / (max_label if max_label > 0 else 1))
-    colors[labels < 0] = 0
-    pcd.colors = open3d.utility.Vector3dVector(colors[:, :3])
-    
-    # Visualize
-    open3d.visualization.draw_geometries([pcd],
-                                         front=[-0.9945, 0.03873, 0.0970],
-                                         lookat=[38.4120, 0.6139, 0.48500],
-                                         up=[0.095457, -0.0421, 0.99453],
-                                         zoom=0.33799
-                                         )
-    return velo_points    
 
 def segment_bb_frustum_from_projected_pcd(detections, projected_points, projected_grid, calib, labels=[], visualize=True, orig_img = None):
     """
@@ -273,35 +104,17 @@ def segment_bb_frustum_from_projected_pcd(detections, projected_points, projecte
             # Get indicies where detection mask is true and projected points is non zero
             mask_inds = np.where(((detection['mask'][:, :] == True) & ((projected_grid[:,:,0] > 0) | (projected_grid[:,:,1] > 0) | (projected_grid[:,:,2] > 0))))
             object_pts_2d = np.transpose(projected_grid[mask_inds])
-            print('MASK DETECTION PCD SIZE:', object_pts_2d.shape)
 
         # bounding box
         # elif 'bb' in detection.keys() and detection['bb'] is not None:
-        if 'bb' in detection.keys() and detection['bb'] is not None:
-            # # Bounding box indices
-            # bb_offset = 5
-            # y_start = int(detection['bb'][0][1])+bb_offset
-            # y_end = int(detection['bb'][2][1])+1-bb_offset
-            # x_start = int(detection['bb'][0][0])+bb_offset
-            # x_end = int(detection['bb'][1][0])+1-bb_offset
-
-            # object_pts_2d = projected_grid[y_start:y_end, x_start:x_end]
-            # object_pts_2d = np.transpose(np.reshape(object_pts_2d, (-1, 3)))
-            
+        if 'bb' in detection.keys() and detection['bb'] is not None:            
             object_pts_2d = projected_points[:, bb_inds[i]]
-            print('BB DETECTION PCD SIZE:', object_pts_2d.shape)
 
         else:
             print('ERROR: no bounding box or mask detected')
             raise NotImplementedError
         
         if object_pts_2d.shape[0] == 3 and object_pts_2d.shape[1] > 0:
-            # if visualize:
-            #     if mask_points_list is None:
-            #         mask_points_list = mask_bb_pts_2d/mask_bb_pts_2d[2]
-            #     else:
-            #         mask_points_list = np.append(mask_points_list, mask_bb_pts_2d/mask_bb_pts_2d[2], axis=1)
-
             cam_coords = image_transform[:3, :3] @ object_pts_2d
 
             # Get projection from camera coordinates to velodyne coordinates
@@ -321,17 +134,6 @@ def segment_bb_frustum_from_projected_pcd(detections, projected_points, projecte
             pcd.points = open3d.utility.Vector3dVector(np.transpose(detection['frustum_pcd']))
             o3d_pcd_list.append(pcd)
 
-        # print('MP_PCD_LIST: ', mp_pcd_list)
-
-    # print(mask_points_list.shape)
-    # if visualize:
-    #     mask_points_list = []
-    #     fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-    #     ax.clear()
-    #     ax.imshow(orig_img)
-    #     ax.scatter(mask_points_list[0, :], mask_points_list[1, :], s=1, c='red')
-    #     plt.show()
-
     if visualize:
         open3d.visualization.draw_geometries(o3d_pcd_list + labels,
                                          front=[-0.9945, 0.03873, 0.0970],  
@@ -341,6 +143,7 @@ def segment_bb_frustum_from_projected_pcd(detections, projected_points, projecte
                                          )
         
     return [detection['frustum_pcd'] for detection in detections]
+
 
 def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=True):
     """
@@ -354,7 +157,7 @@ def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=True):
     pcd.points = open3d.utility.Vector3dVector(pointcloud)
     
     # Run RANSAC
-    model, inliers = pcd.segment_plane(distance_threshold=0.1,ransac_n=3, num_iterations=100)
+    model, inliers = pcd.segment_plane(distance_threshold=0.12,ransac_n=3, num_iterations=100)
 
     # Get the average inlier coorindate values
     average_inlier = np.mean(pointcloud[inliers], axis=0)
@@ -381,51 +184,124 @@ def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=True):
     return np.reshape(segmented_pointcloud, (-1, 3))
 
 
-def apply_dbscan(pointcloud, keep_n=None, visualize=True):
+def get_cluster_scores(cluster_list, detection, weights = [1.0, 1.0, 1.0, 1.0], use_autodrive_classes = False):
+    
+    proj_velo2cam2 = project_velo_to_cam2(detection['calib'])
+    cluster_losses = []
+    for i, cluster in enumerate(cluster_list):
+        loss_list = []
+        if use_autodrive_classes:
+            obj_list = get_autodrive_classes()
+        else:
+            obj_list = get_used_coco_classes()
+        # Compare 3D extent of cluster vs car, truck, pedestrian avg size
+        avg_volume = []
+        
+        # Compare 3D proportions vs average proportions
+        ############################################################
+        # Average height
+        ############################################################
+        avg_height = [1.64592, .856, 2, 4.1148, 2, 4.1148, 4.572, 1.27, 1.8, 1.4, 1, 4]
+        class_idx = obj_list.index(get_coco_class(detection['class']))
+        
+        cluster_3d_bb = cluster.get_axis_aligned_bounding_box()
+        cluster_height = cluster_3d_bb.get_half_extent()[2]
+        
+        loss = weights[0]*(cluster_height-avg_height[class_idx])**2
+        loss_list.append(loss)
+        
+        ############################################################
+        # 2D extent
+        ############################################################
+        cluster_points = np.array(cluster.points)
+        
+        # apply projection
+        pts_2d = project_to_image(cluster_points.transpose(), proj_velo2cam2)
+
+        # Filter out pixels points
+        imgfov_pc_pixel = pts_2d
+        
+        # Retrieve depth from lidar
+        imgfov_pc_velo = cluster_points
+        
+        # make homoegenous
+        imgfov_pc_velo = np.hstack((imgfov_pc_velo, np.ones((imgfov_pc_velo.shape[0], 1))))
+
+        # Project lidar points onto image
+        imgfov_pc_cam2 = proj_velo2cam2 @ imgfov_pc_velo.transpose()
+        
+        # Turn lidar into 2D array
+        min_x = float('inf')
+        max_x = -float('inf')
+        min_y = float('inf')
+        max_y = -float('inf')
+        for point in np.transpose(imgfov_pc_cam2):
+            x = point[0]/point[2]
+            y = point[1]/point[2]
+            if x < min_x: min_x = x
+            elif x > max_x: max_x = x
+            if y < min_y: min_y = y
+            elif y > max_y: max_y = y 
+            
+        cluster_extent_x = max_x - min_x
+        cluster_extent_y = max_y - min_y
+        
+        bb_extent_x = detection['bb'][1][0] - detection['bb'][0][0]
+        bb_extent_y = detection['bb'][2][1] - detection['bb'][0][1]
+        
+        IoU = (cluster_extent_x*cluster_extent_y)/(bb_extent_x*bb_extent_y)
+        
+        cluster_extent_score=weights[1]*1/IoU**2
+        loss_list.append(cluster_extent_score)
+        
+        # Cluster centroid distances relative to % of 2D extent
+        
+        # Cluster centroid distance from frustum centroid
+        # Cluster centroid distance from car
+
+        cluster_losses.append(np.sum(np.array(loss_list)))
+    
+    return cluster_losses
+
+
+def apply_dbscan(pointcloud, detection, keep_n=5, visualize=True):
     """
     Applies DBSCAN on the provided point cloud and returns the Open3D point cloud
     """
     
     # Create Open3D point cloud
-    start = time.perf_counter()
     pcd = open3d.geometry.PointCloud()
     pcd.points = open3d.utility.Vector3dVector(np.transpose(pointcloud))
-    print(f'Creating Open3D Cloud: {time.perf_counter()-start}')
         
     # Run DBSCAN on point cloud
     # with open3d.utility.VerbosityContextManager(open3d.utility.VerbosityLevel.Debug) as cm:
-    start = time.perf_counter()
     labels = np.array(pcd.cluster_dbscan(eps=1, min_points=10))
-    print(f'DBSCAN CLUSTERING: {time.perf_counter()-start}')
 
     # Set colors of point cloud to see DBSCAN clusters
-    start = time.perf_counter()
     max_label = labels.max()
     # print(f"point cloud has {max_label + 1} clusters")
     colors = plt.get_cmap("tab20")(labels / (max_label if max_label > 0 else 1))
     colors[labels < 0] = 0
     pcd.colors = open3d.utility.Vector3dVector(colors[:, :3])
     counts = collections.Counter(labels)
-    print(f'Getting Cluster Sizes: {time.perf_counter()-start}')
         
-    start = time.perf_counter()
+    # Get top n clusters
     pcd_list = []
-    if not keep_n:
-        for label in range(labels.max()+1):
-            if not label < 0:
-                pcd_list.append(pcd.select_by_index(np.argwhere(labels==label)))
-    else:
-        for label, count in counts.most_common(keep_n):
-            if not label < 0:
-                pcd_list.append(pcd.select_by_index(np.argwhere(labels==label)))
-        
-    print(f'CHOOSING BEST CLUSTER: {time.perf_counter()-start}')
+    for label, count in counts.most_common(keep_n):
+        if not label < 0:
+            pcd_list.append(pcd.select_by_index(np.argwhere(labels==label)))
+
+    if pcd_list:
+        cluster_losses = get_cluster_scores(pcd_list, detection)
+        object_candidate_cluster_idx = np.argmin(cluster_losses)
+        pcd_list = [pcd_list[object_candidate_cluster_idx]]
         
     if visualize:
         # Visualize
         open3d.visualization.draw_geometries([pcd])
     
     return pcd_list
+
 
 def generate_3d_bb(pcd_list, detections, oriented=False, visualize=True):
     """
@@ -447,6 +323,7 @@ def generate_3d_bb(pcd_list, detections, oriented=False, visualize=True):
         open3d.visualization.draw_geometries(display_list)
         
     return generated_bb_list
+
 
 def detection_analysis(detections, labels):
 
@@ -547,6 +424,7 @@ def detection_analysis(detections, labels):
 
     return analysis_metrics
 
+
 def compare_generation_accuracy(comp_list, visualize=True):    
     # comp format: [point cloud, ground truth bb, generated bb]
     for i, comp in enumerate(comp_list):
@@ -577,6 +455,7 @@ def compare_generation_accuracy(comp_list, visualize=True):
         
         if visualize:
             open3d.visualization.draw_geometries(comp + [pointcloud_center, generated_center, groundtruth_center])
+
 
 def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, ground_removal = True):
     """
@@ -626,16 +505,13 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, gr
     metrics['dbscan_clustering_time'] = 0
 
     for i, segmented_pcd in enumerate(segmented_pcds):
-        print(f'DBSCAN Object {i+1}')
         if detection_info[i]['frustum_pcd'] is not None:
-            print('DBSCAN')
-            object_candidate_cluster, execution_time = time_function(apply_dbscan, (segmented_pcd,), {'keep_n': 1, 'visualize': False})
+            object_candidate_cluster, execution_time = time_function(apply_dbscan, (segmented_pcd, detection_info[i]), {'keep_n': 3, 'visualize': False})
             object_candidate_clusters.extend(object_candidate_cluster)
             detection_info[i]['object_candidate_cluster'] = object_candidate_cluster
 
             metrics['dbscan_clustering_time'] += execution_time
         else:
-            print('No DBSCAN')
             detection_info[i]['object_candidate_cluster'] = None
     
     metrics['total_time'] += metrics['dbscan_clustering_time']
@@ -656,6 +532,7 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, gr
     print(f'{"Bounding Box Generation Time":<30}: {metrics["3d_bounding_box_generation_time"]:.>5.4f} s.')
 
     return generated_3d_bb_list, object_candidate_clusters, detection_info, metrics
+
 
 def test_kitti_scenes(file_num = 0, use_vis = False):
     run_files = [file_num] if not isinstance(file_num, list) else file_num
@@ -709,7 +586,7 @@ def test_kitti_scenes(file_num = 0, use_vis = False):
         # RUN DETECTION
         #############################################################################
         labels={'kitti_gt_3d_bb': kitti_gt_3d_bb, 'kitti_gt_labels': kitti_gt_labels}
-        mr_detections = [{'frame': file, 'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
+        mr_detections = [{'calib':kitti_gt_calib, 'frame': file, 'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
         # mr_detections = [{'frame': file, 'class': cls, 'bb': bb} for cls, bb in zip(mr_inf_labels, mr_inf_2d_bb_list)]
         
         generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(kitti_gt_calib, kitti_gt_image, kitti_gt_pointcloud, mr_detections, labels, use_vis)
@@ -804,7 +681,3 @@ if __name__ == '__main__':
         20,
     ]
     test_kitti_scenes(test_list, use_vis=False)
-
-
-
-
