@@ -620,7 +620,7 @@ def prepare_tracking_files(scene_list):
         scene_dict[str(scene)] = files
     return scene_dict
 
-def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False):
+def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False, detector = "bb"):
     if tracking:
         scenes = prepare_tracking_files(file_num)
     else:
@@ -772,6 +772,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--tracking", default=False, action="store_true")
     parser.add_argument("--vis", default=False, action="store_true")
+    parser.add_argument("--detector")
     arguments = parser.parse_args()
     test_list = [
         0,
@@ -796,4 +797,4 @@ if __name__ == '__main__':
         19,
         20
     ]
-    test_kitti_scenes(test_list, arguments.vis, arguments.tracking)
+    test_kitti_scenes(test_list, arguments.vis, arguments.tracking, arguments.detector)
