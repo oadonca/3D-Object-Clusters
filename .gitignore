@@ -1,7 +1,9 @@
 .env
 ./group5_detection/kitti_groundtruth
 kitti_tracking
-./group5_detection/mask_rcnn_inference
+detection
+mask_rcnn_inference
 *.png
 *test.py
 *.pyc
+*.json

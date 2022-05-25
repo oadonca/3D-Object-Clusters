@@ -9,6 +9,8 @@ from matplotlib import pyplot as plt
 import multiprocessing as mp
 import time
 import json
+import pickle
+import re
 
 class Box3D(object):
     """
@@ -16,7 +18,7 @@ class Box3D(object):
     """
 
     def __init__(self, label_file_line):
-        data = label_file_line.split(' ')
+        data = label_file_line.split(' ')[-15:]
         data[1:] = [float(x) for x in data[1:]]
 
         self.type = data[0]
@@ -76,9 +78,13 @@ class DetectionEncoder(json.JSONEncoder):
 # Projections
 # =========================================================
 def project_velo_to_cam2(calib):
-    P_velo2cam_ref = np.vstack((calib['Tr_velo_to_cam'].reshape(3, 4), np.array([0., 0., 0., 1.])))  # velo2ref_cam
+    velo_tmp = calib['Tr_velo_cam'] if 'Tr_velo_cam' in calib else calib['Tr_velo_to_cam']
+    P_velo2cam_ref = np.vstack((velo_tmp.reshape(3, 4), np.array([0., 0., 0., 1.])))  # velo2ref_cam
     R_ref2rect = np.eye(4)
-    R0_rect = calib['R0_rect'].reshape(3, 3)  # ref_cam2rect
+    if 'R_rect' in calib:
+        R0_rect = calib['R_rect'].reshape(3, 3)  # ref_cam2rect
+    else:
+        R0_rect = calib['R0_rect'].reshape(3, 3)  # ref_cam2rect
     R_ref2rect[:3, :3] = R0_rect
     P_rect2cam2 = calib['P2'].reshape((3, 4))
     proj_mat = P_rect2cam2 @ R_ref2rect @ P_velo2cam_ref
@@ -95,12 +101,16 @@ def project_image_to_cam2(calib):
 
 def project_cam2_to_velo(calib):
     R_ref2rect = np.eye(4)
-    R0_rect = calib['R0_rect'].reshape(3, 3)  # ref_cam2rect
+    if 'R_rect' in calib:
+        R0_rect = calib['R_rect'].reshape(3, 3)  # ref_cam2rect
+    else:
+        R0_rect = calib['R0_rect'].reshape(3, 3)  # ref_cam2rect
     R_ref2rect[:3, :3] = R0_rect
     R_ref2rect_inv = np.linalg.inv(R_ref2rect)  # rect2ref_cam
 
     # inverse rigid transformation
-    velo2cam_ref = np.vstack((calib['Tr_velo_to_cam'].reshape(3, 4), np.array([0., 0., 0., 1.])))  # velo2ref_cam
+    velo_tmp = calib['Tr_velo_cam'] if 'Tr_velo_cam' in calib else calib['Tr_velo_to_cam']
+    velo2cam_ref = np.vstack((velo_tmp.reshape(3, 4), np.array([0., 0., 0., 1.])))  # velo2ref_cam
     P_cam_ref2velo = np.linalg.inv(velo2cam_ref)
 
     proj_mat = P_cam_ref2velo @ R_ref2rect_inv
@@ -188,8 +198,8 @@ def read_calib_file(filepath):
     with open(filepath, 'r') as f:
         for line in f.readlines():
             line = line.rstrip()
-            if len(line) == 0: continue
-            key, value = line.split(':', 1)
+            if len(line) == 0: continue  
+            key, value = re.split(':| ', line, 1)
             # The only non-float values in these files are dates, which
             # we don't care about anyway
             try:
@@ -287,53 +297,71 @@ def load_kitti_groundtruth(file_num = 0, scene = "None"):
                     print(f'Error loading inference artifacts for scene {str(num).zfill(6)}')
     else:
         try:
-            calibs = read_calib_file(f'kitti_tracking/testing/calib/{str(scene).zfill(4)}.txt')
-            images = cv2.cvtColor(cv2.imread(f'kitti_tracking/testing/image_02/{str(scene).zfill(4)}/{str(file_num).zfill(6)}.png'), cv2.COLOR_BGR2RGB)
-            labels = load_label(f'kitti_tracking/testing/label_02/{str(scene).zfill(4)}.txt')
-            pointclouds = load_velo_scan(f'kitti_tracking/testing/velodyne/{str(scene).zfill(4)}/{str(file_num).zfill(6)}.bin')[:, :3]
-        except:
+            calibs = read_calib_file(f'kitti_tracking/training/calib/{str(scene).zfill(4)}.txt')
+            images = cv2.cvtColor(cv2.imread(f'kitti_tracking/training/image_02/{str(scene).zfill(4)}/{str(file_num).zfill(6)}.png'), cv2.COLOR_BGR2RGB)
+            labels = load_label(f'kitti_tracking/training/label_02/{str(scene).zfill(4)}.txt')
+            pointclouds = load_velo_scan(f'kitti_tracking/training/velodyne/{str(scene).zfill(4)}/{str(file_num).zfill(6)}.bin')[:, :3]
+        except Exception as e:
+            print(e)
             print(f'Error loading inference artifacts for scene {str(scene).zfill(4)} and file {str(file_num).zfill(6)}')
 
     return images, pointclouds, labels, calibs
 
-def load_mask_rcnn_inference(file_num = 0):
+def load_mask_rcnn_inference(file_num = 0, scene = "None"):
     bboxes = []
     images = []
     labels = []
     segmentations = []
-    if isinstance(file_num, int):
-        try:
-            bboxes = np.load(f'mask_rcnn_inference/bboxes/bboxes_kitti_{str(file_num).zfill(6)}.npy')
-            images = cv2.cvtColor(cv2.imread(f'mask_rcnn_inference/image/inference_test-kitti_{str(file_num).zfill(6)}.png'), cv2.COLOR_BGR2RGB)
-            labels = np.load(f'mask_rcnn_inference/labels/labels_kitti_{str(file_num).zfill(6)}.npy')
-            segmentations = np.load(f'mask_rcnn_inference/segmentation/segmentation_kitti_{str(file_num).zfill(6)}.npy')
-            
-            bboxes, segmentations, labels = remove_extra_coco_detections(bboxes, segmentations, labels)
-            
-        except Exception as e:
-            print(f'Error loading inference artifacts for scene {str(file_num).zfill(6)}')
-            print(e)
-            quit()
-            
-    elif isinstance(file_num, list):
-        for i, num in enumerate(file_num):
-            try:
-                bbox = np.load(f'mask_rcnn_inference/bboxes/bboxes_kitti_{str(num).zfill(6)}.npy')
-                image = cv2.cvtColor(cv2.imread(f'mask_rcnn_inference/image/inference_test-kitti_{str(num).zfill(6)}.png'), cv2.COLOR_BGR2RGB)
-                label = np.load(f'mask_rcnn_inference/labels/labels_kitti_{str(num).zfill(6)}.npy')
-                segmentation = np.load(f'mask_rcnn_inference/segmentation/segmentation_kitti_{str(num).zfill(6)}.npy')
-                
-                bbox, segmentation, label = remove_extra_coco_detections(bbox, segmentation, label)
-                
+    if scene != "None":
+        with open(f'mask_rcnn_inference/training/{scene.zfill(4)}/{str(file_num).zfill(6)}.pkl', 'rb') as file:
+            pickleFile = pickle.load(file)
+        temp_bboxes = pickleFile[0]
+        temp_segmentations = pickleFile[1]
+        for label in range(len(temp_bboxes)):
+            for i, bbox in enumerate(temp_bboxes[label]):
                 bboxes.append(bbox)
-                images.append(image)
                 labels.append(label)
-                segmentations.append(segmentation)
+                segmentations.append(temp_segmentations[label][i])
+
+        bboxes = np.array(bboxes)
+        segmentations = np.array(segmentations)
+        labels = np.array(labels)
+        bboxes, segmentations, labels = remove_extra_coco_detections(bboxes, segmentations, labels)
+
+    else:
+        if isinstance(file_num, int):
+            try:
+                bboxes = np.load(f'mask_rcnn_inference/bboxes/bboxes_kitti_{str(file_num).zfill(6)}.npy')
+                images = cv2.cvtColor(cv2.imread(f'mask_rcnn_inference/image/inference_test-kitti_{str(file_num).zfill(6)}.png'), cv2.COLOR_BGR2RGB)
+                labels = np.load(f'mask_rcnn_inference/labels/labels_kitti_{str(file_num).zfill(6)}.npy')
+                segmentations = np.load(f'mask_rcnn_inference/segmentation/segmentation_kitti_{str(file_num).zfill(6)}.npy')
+                
+                bboxes, segmentations, labels = remove_extra_coco_detections(bboxes, segmentations, labels)
                 
             except Exception as e:
-                print(f'Error loading inference artifacts for scene {str(num).zfill(6)}')
+                print(f'Error loading inference artifacts for scene {str(file_num).zfill(6)}')
                 print(e)
                 quit()
+                
+        elif isinstance(file_num, list):
+            for i, num in enumerate(file_num):
+                try:
+                    bbox = np.load(f'mask_rcnn_inference/bboxes/bboxes_kitti_{str(num).zfill(6)}.npy')
+                    image = cv2.cvtColor(cv2.imread(f'mask_rcnn_inference/image/inference_test-kitti_{str(num).zfill(6)}.png'), cv2.COLOR_BGR2RGB)
+                    label = np.load(f'mask_rcnn_inference/labels/labels_kitti_{str(num).zfill(6)}.npy')
+                    segmentation = np.load(f'mask_rcnn_inference/segmentation/segmentation_kitti_{str(num).zfill(6)}.npy')
+                    
+                    bbox, segmentation, label = remove_extra_coco_detections(bbox, segmentation, label)
+                    
+                    bboxes.append(bbox)
+                    images.append(image)
+                    labels.append(label)
+                    segmentations.append(segmentation)
+                    
+                except Exception as e:
+                    print(f'Error loading inference artifacts for scene {str(num).zfill(6)}')
+                    print(e)
+                    quit()
 
     return images, bboxes, segmentations, labels
 
@@ -563,8 +591,10 @@ def get_ab3dmot_format(detection_info):
             # Detection type/class
             if get_coco_class(detection['class']) in ['car', 'bus', 'truck', 'train']:
                 detection_input['type'] = 2
+            elif get_coco_class(detection['class']) in ['bicycle']:
+                detection_input['type'] = 3
             elif get_coco_class(detection['class']) in ['person']:
-                detection_input['type'] = 0
+                detection_input['type'] = 1
                 
             # 2D bounding box top left and bottom right coordinates
             detection_input['2d_bb'] = [detection['bb'][0][0], detection['bb'][0][1], detection['bb'][3][0], detection['bb'][3][1]]
