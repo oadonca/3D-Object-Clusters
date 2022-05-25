@@ -95,7 +95,7 @@ def render_lidar_with_boxes(pc_velo, objects, calib, img_width, img_height, dbsc
                                          )
 
 
-def render_lidar_on_image(pts_velo, orig_img, calib, img_width, img_height, visualize=True):
+def render_lidar_on_image(pts_velo, orig_img, calib, img_width, img_height, depth_limit = 40, visualize=True):
     """
     Projects the given lidar points onto the given image using the projection/transformation matrices provided in calib
     
@@ -130,9 +130,10 @@ def render_lidar_on_image(pts_velo, orig_img, calib, img_width, img_height, visu
     # Turn lidar into 2D array
     projected_grid = np.zeros_like(img).astype(float)
     for point in np.transpose(imgfov_pc_cam2):
-        x = point[0]/point[2]
-        y = point[1]/point[2]
-        projected_grid[int(y), int(x)] = point
+        if point[2] < depth_limit:
+            x = point[0]/point[2]
+            y = point[1]/point[2]
+            projected_grid[int(y), int(x)] = point
 
     if visualize:
         cmap = plt.cm.get_cmap('hsv', 256)
@@ -263,7 +264,8 @@ def segment_bb_frustum_from_projected_pcd(detections, projected_points, projecte
     # Get only the points within bounding boxes
     # Only need this for only bounding box segmentation, not required for mask propagation
     # inds = within_bb_indices(detections, projected_points/projected_points[2,:])
-    
+    bb_inds = within_bb_indices(detections, projected_points/projected_points[2,:])
+
     # Non parallel
     for i, detection in enumerate(detections): 
         # mask propagation
@@ -271,19 +273,24 @@ def segment_bb_frustum_from_projected_pcd(detections, projected_points, projecte
             # Get indicies where detection mask is true and projected points is non zero
             mask_inds = np.where(((detection['mask'][:, :] == True) & ((projected_grid[:,:,0] > 0) | (projected_grid[:,:,1] > 0) | (projected_grid[:,:,2] > 0))))
             object_pts_2d = np.transpose(projected_grid[mask_inds])
+            print('MASK DETECTION PCD SIZE:', object_pts_2d.shape)
 
         # bounding box
-        elif 'bb' in detection.keys() and detection['bb'] is not None:
-            # Bounding box indices
-            bb_offset = 5
-            y_start = int(detection['bb'][0][1])+bb_offset
-            y_end = int(detection['bb'][2][1])+1-bb_offset
-            x_start = int(detection['bb'][0][0])+bb_offset
-            x_end = int(detection['bb'][1][0])+1-bb_offset
+        # elif 'bb' in detection.keys() and detection['bb'] is not None:
+        if 'bb' in detection.keys() and detection['bb'] is not None:
+            # # Bounding box indices
+            # bb_offset = 5
+            # y_start = int(detection['bb'][0][1])+bb_offset
+            # y_end = int(detection['bb'][2][1])+1-bb_offset
+            # x_start = int(detection['bb'][0][0])+bb_offset
+            # x_end = int(detection['bb'][1][0])+1-bb_offset
 
-            object_pts_2d = projected_grid[y_start:y_end, x_start:x_end]
-            object_pts_2d = np.transpose(np.reshape(object_pts_2d, (-1, 3)))
+            # object_pts_2d = projected_grid[y_start:y_end, x_start:x_end]
+            # object_pts_2d = np.transpose(np.reshape(object_pts_2d, (-1, 3)))
             
+            object_pts_2d = projected_points[:, bb_inds[i]]
+            print('BB DETECTION PCD SIZE:', object_pts_2d.shape)
+
         else:
             print('ERROR: no bounding box or mask detected')
             raise NotImplementedError
@@ -388,7 +395,7 @@ def apply_dbscan(pointcloud, keep_n=None, visualize=True):
     # Run DBSCAN on point cloud
     # with open3d.utility.VerbosityContextManager(open3d.utility.VerbosityLevel.Debug) as cm:
     start = time.perf_counter()
-    labels = np.array(pcd.cluster_dbscan(eps=.1, min_points=10))
+    labels = np.array(pcd.cluster_dbscan(eps=1, min_points=10))
     print(f'DBSCAN CLUSTERING: {time.perf_counter()-start}')
 
     # Set colors of point cloud to see DBSCAN clusters
@@ -599,23 +606,22 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, gr
     #############################################################################
     # PROJECT KITTI GT POINTCLOUD POINTS ONTO IMAGE
     #############################################################################
-
     (projected_pcd_points, projected_pcd_grid), metrics['3d_to_2d_projection_time'] = time_function(render_lidar_on_image, (ground_remove_pcd, image, calib, image.shape[1], image.shape[0]), {'visualize': use_vis})
     
     metrics['total_time'] += metrics['3d_to_2d_projection_time']
     
+    
     #############################################################################
     # SEGMENT FRUSTUMS 
     #############################################################################
-
     segmented_pcds, metrics['frustum_segmentation_time'] = time_function(segment_bb_frustum_from_projected_pcd, (detection_info, projected_pcd_points, projected_pcd_grid, calib), {'labels': labels['kitti_gt_3d_bb'], 'visualize': use_vis, 'orig_img': image})
     
     metrics['total_time'] += metrics['frustum_segmentation_time']
 
+
     #############################################################################
     # APPLY DBSCAN CLUSTERING TO EACH FRUSTUM 
     #############################################################################
-
     object_candidate_clusters = []
     metrics['dbscan_clustering_time'] = 0
 
@@ -623,7 +629,7 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, gr
         print(f'DBSCAN Object {i+1}')
         if detection_info[i]['frustum_pcd'] is not None:
             print('DBSCAN')
-            object_candidate_cluster, execution_time = time_function(apply_dbscan, (segmented_pcd,), {'keep_n': 1, 'visualize': True})
+            object_candidate_cluster, execution_time = time_function(apply_dbscan, (segmented_pcd,), {'keep_n': 1, 'visualize': False})
             object_candidate_clusters.extend(object_candidate_cluster)
             detection_info[i]['object_candidate_cluster'] = object_candidate_cluster
 
@@ -634,10 +640,10 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, gr
     
     metrics['total_time'] += metrics['dbscan_clustering_time']
 
+
     #############################################################################
     # GENERATE 3D BOUNDING BOXES 
     #############################################################################
-
     generated_3d_bb_list, metrics['3d_bounding_box_generation_time'] = time_function(generate_3d_bb, (object_candidate_clusters, detection_info), {'visualize': use_vis})
     
     metrics['total_time'] += metrics['3d_bounding_box_generation_time'] 
@@ -703,8 +709,8 @@ def test_kitti_scenes(file_num = 0, use_vis = False):
         # RUN DETECTION
         #############################################################################
         labels={'kitti_gt_3d_bb': kitti_gt_3d_bb, 'kitti_gt_labels': kitti_gt_labels}
-        # mr_detections = [{'frame': file, 'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
-        mr_detections = [{'frame': file, 'class': cls, 'bb': bb} for cls, bb in zip(mr_inf_labels, mr_inf_2d_bb_list)]
+        mr_detections = [{'frame': file, 'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
+        # mr_detections = [{'frame': file, 'class': cls, 'bb': bb} for cls, bb in zip(mr_inf_labels, mr_inf_2d_bb_list)]
         
         generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(kitti_gt_calib, kitti_gt_image, kitti_gt_pointcloud, mr_detections, labels, use_vis)
         
@@ -775,27 +781,27 @@ def test_kitti_scenes(file_num = 0, use_vis = False):
         
 if __name__ == '__main__':
     test_list = [
-        # 0,
-        # 1,
-        # 2,
-        # 3,
-        # 4,
-        # 5,
-        # 6,
-        # 7,
-        # 8,
-        # 9,
-        # 10,
-        # 11,
-        # 12,
-        # 13,
-        # 14,
-        # 15,
-        # 16,
-        # 17,
-        # 18,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
         19,
-        # 20,
+        20,
     ]
     test_kitti_scenes(test_list, use_vis=False)
 
