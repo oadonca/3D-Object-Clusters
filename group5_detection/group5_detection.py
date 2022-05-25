@@ -188,8 +188,7 @@ def segment_bb_frustum_from_projected_pcd(detections, projected_points, projecte
             object_pts_2d = np.transpose(projected_grid[mask_inds])
 
         # bounding box
-        # elif 'bb' in detection.keys() and detection['bb'] is not None:
-        if 'bb' in detection.keys() and detection['bb'] is not None:            
+        elif 'bb' in detection.keys() and detection['bb'] is not None:
             object_pts_2d = projected_points[:, bb_inds[i]]
 
         else:
@@ -252,9 +251,9 @@ def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=False):
     
     if visualize:
         # Visualize
-        inlier_cloud = pcd.select_down_sample(inliers) # use select_by_index() depending on version of open3d
+        inlier_cloud = pcd.select_by_index(inliers) # use select_by_index() depending on version of open3d
         inlier_cloud.paint_uniform_color([1.0, 0, 0])
-        outlier_cloud = pcd.select_down_sample(inliers, invert=True) # same as above
+        outlier_cloud = pcd.select_by_index(inliers, invert=True) # same as above
         outlier_cloud.paint_uniform_color([0, 0, 1.0])
         open3d.visualization.draw_geometries([inlier_cloud, outlier_cloud] + labels,
                                     zoom=0.8,
@@ -370,9 +369,9 @@ def apply_dbscan(pointcloud, detection, keep_n=5, visualize=True):
     pcd_list = []
     for label, count in counts.most_common(keep_n):
         if not label < 0:
-            pcd_list.append(pcd.select_down_sample(np.argwhere(labels==label))) # select_by_index() instead
+            pcd_list.append(pcd.select_by_index(np.argwhere(labels==label))) # select_by_index() instead
 
-    if pcd_list:
+    if len(pcd_list) > 1:
         cluster_losses = get_cluster_scores(pcd_list, detection)
         object_candidate_cluster_idx = np.argmin(cluster_losses)
         pcd_list = [pcd_list[object_candidate_cluster_idx]]
@@ -536,7 +535,7 @@ def compare_generation_accuracy(comp_list, visualize=False):
             open3d.visualization.draw_geometries(comp + [pointcloud_center, generated_center, groundtruth_center])
 
 
-def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, ground_removal = True):
+def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, use_mask = False):
     """
     Runs 3D object detection 
 
@@ -553,7 +552,7 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, gr
     #############################################################################
     # REMOVE GROUND 
     #############################################################################
-    if ground_removal:
+    if not use_mask:
         ground_remove_pcd, metrics['ground_removal_time'] = time_function(remove_ground, (pcd,), {'labels': labels['kitti_gt_3d_bb'], 'removal_offset': .075, 'visualize': use_vis})
         
         metrics['total_time'] += metrics['ground_removal_time']
@@ -585,7 +584,8 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, gr
 
     for i, segmented_pcd in enumerate(segmented_pcds):
         if detection_info[i]['frustum_pcd'] is not None:
-            object_candidate_cluster, execution_time = time_function(apply_dbscan, (segmented_pcd, detection_info[i]), {'keep_n': 3, 'visualize': False})
+            keep_n = 1 if use_mask else 3
+            object_candidate_cluster, execution_time = time_function(apply_dbscan, (segmented_pcd, detection_info[i]), {'keep_n': keep_n, 'visualize': False})
             object_candidate_clusters.extend(object_candidate_cluster)
             detection_info[i]['object_candidate_cluster'] = object_candidate_cluster
 
@@ -620,7 +620,7 @@ def prepare_tracking_files(scene_list):
         scene_dict[str(scene)] = files
     return scene_dict
 
-def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False):
+def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False, use_mask = False):
     if tracking:
         scenes = prepare_tracking_files(file_num)
     else:
@@ -684,10 +684,12 @@ def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False):
             # RUN DETECTION
             #############################################################################
             labels={'kitti_gt_3d_bb': kitti_gt_3d_bb, 'kitti_gt_labels': kitti_gt_labels}
-            mr_detections = [{'calib':kitti_gt_calib, 'frame': file, 'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
-            # mr_detections = [{'frame': file, 'class': cls, 'bb': bb} for cls, bb in zip(mr_inf_labels, mr_inf_2d_bb_list)]
+            if use_mask:
+                mr_detections = [{'calib': kitti_gt_calib, 'frame': file, 'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
+            else:
+                mr_detections = [{'calib': kitti_gt_calib, 'frame': file, 'class': cls, 'bb': bb} for cls, bb in zip(mr_inf_labels, mr_inf_2d_bb_list)]
             
-            generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(kitti_gt_calib, kitti_gt_image, kitti_gt_pointcloud, mr_detections, labels, use_vis)
+            generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(kitti_gt_calib, kitti_gt_image, kitti_gt_pointcloud, mr_detections, labels, use_vis, use_mask)
             
             
             #############################################################################
@@ -717,40 +719,40 @@ def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False):
                 mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
                 open3d.visualization.draw_geometries(clustered_kitti_gt_pcd_list + kitti_gt_3d_bb + generated_3d_bb_list + [mesh_frame])
 
-        # #############################################################################
-        # # GET TEST METRICS
-        # #############################################################################
-        # if detection_metrics['total_time'] > test_metrics['max_scene_time']:
-        #     test_metrics['max_scene_time'] = detection_metrics['total_time']
-        # if detection_metrics['total_time'] < test_metrics['min_scene_time']:
-        #     test_metrics['min_scene_time'] = detection_metrics['total_time']
-        # test_metrics['avg_scene_time'] += detection_metrics['total_time']
-        
-        # detection_metrics['avg_time_per_detection'] = detection_metrics['total_time']/len(mr_inf_labels)
-        # if detection_metrics['avg_time_per_detection'] > test_metrics['max_individual_detection_time']:
-        #     test_metrics['max_individual_detection_time'] = detection_metrics['avg_time_per_detection']
-        # if detection_metrics['avg_time_per_detection'] < test_metrics['min_individual_detection_time']:
-        #     test_metrics['min_individual_detection_time'] = detection_metrics['avg_time_per_detection']
-        # test_metrics['avg_individual_detection_time'] += detection_metrics['avg_time_per_detection']
-        # test_metrics['total_detections'] += len(mr_inf_labels)
+            #############################################################################
+            # GET TEST INFERENCE METRICS
+            #############################################################################
+            if detection_metrics['total_time'] > test_metrics['max_scene_time']:
+                test_metrics['max_scene_time'] = detection_metrics['total_time']
+            if detection_metrics['total_time'] < test_metrics['min_scene_time']:
+                test_metrics['min_scene_time'] = detection_metrics['total_time']
+            test_metrics['avg_scene_time'] += detection_metrics['total_time']
+            
+            detection_metrics['avg_time_per_detection'] = detection_metrics['total_time']/len(mr_inf_labels)
+            if detection_metrics['avg_time_per_detection'] > test_metrics['max_individual_detection_time']:
+                test_metrics['max_individual_detection_time'] = detection_metrics['avg_time_per_detection']
+            if detection_metrics['avg_time_per_detection'] < test_metrics['min_individual_detection_time']:
+                test_metrics['min_individual_detection_time'] = detection_metrics['avg_time_per_detection']
+            test_metrics['avg_individual_detection_time'] += detection_metrics['avg_time_per_detection']
+            test_metrics['total_detections'] += len(mr_inf_labels)
 
-        # test_metrics[f'kitti_scene_{str(file).zfill(6)}_inference_metrics'] = detection_metrics
+            test_metrics[f'kitti_scene_{str(file).zfill(6)}_inference_metrics'] = detection_metrics
 
-        # print(f'\nFile {str(file).zfill(6)} Object Detection {"Total Execution Time":<40}: {detection_metrics["total_time"]:.>5.4f} s.')
-        # print(f'File {str(file).zfill(6)} Object Detection {"Avg Inference Time/Detection":<40}: {detection_metrics["avg_time_per_detection"]:.>5.4f} s.')
-        # print(f'Finished Running file {str(file).zfill(6)} Object Detection')
+            print(f'\nFile {str(file).zfill(6)} Object Detection {"Total Execution Time":<40}: {detection_metrics["total_time"]:.>5.4f} s.')
+            print(f'File {str(file).zfill(6)} Object Detection {"Avg Inference Time/Detection":<40}: {detection_metrics["avg_time_per_detection"]:.>5.4f} s.')
+            print(f'Finished Running file {str(file).zfill(6)} Object Detection')
 
 
-        # #############################################################################
-        # # RUN ACCURACY ANALYSIS
-        # #############################################################################
-        # print(f'Starting Running file {str(file).zfill(6)} Detection Analysis')
-        # analysis_metrics = detection_analysis(detection_info, labels)
-        # print(f'Finished Running file {str(file).zfill(6)} Detection Analysis')
+            # #############################################################################
+            # # RUN ACCURACY ANALYSIS
+            # #############################################################################
+            # print(f'Starting Running file {str(file).zfill(6)} Detection Analysis')
+            # analysis_metrics = detection_analysis(detection_info, labels)
+            # print(f'Finished Running file {str(file).zfill(6)} Detection Analysis')
 
-        # test_metrics[f'kitti_scene_{str(file).zfill(6)}_analysis_metrics'] = analysis_metrics
+            # test_metrics[f'kitti_scene_{str(file).zfill(6)}_analysis_metrics'] = analysis_metrics
 
-        # print('='*50)
+            # print('='*50)
         
     test_metrics["avg_individual_detection_time"] = float(test_metrics["avg_individual_detection_time"])/test_metrics["total_detections"]
     test_metrics["avg_scene_time"] = float(test_metrics["avg_scene_time"])/len(test_list)
@@ -772,6 +774,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--tracking", default=False, action="store_true")
     parser.add_argument("--vis", default=False, action="store_true")
+    parser.add_argument("--use-mask", default=False, action="store_true")
     arguments = parser.parse_args()
     test_list = [
         0,
@@ -796,4 +799,4 @@ if __name__ == '__main__':
         19,
         20
     ]
-    test_kitti_scenes(test_list, arguments.vis, arguments.tracking)
+    test_kitti_scenes(test_list, arguments.vis, arguments.tracking, arguments.use_mask)
