@@ -98,7 +98,7 @@ def render_lidar_with_boxes(pc_velo, objects, calib, img_width, img_height, dbsc
                                          )
 
 
-def render_lidar_on_image(pts_velo, orig_img, calib, img_width, img_height, visualize=False):
+def render_lidar_on_image(pts_velo, orig_img, calib, img_width, img_height, depth_limit = 40, visualize=True):
     """
     Projects the given lidar points onto the given image using the projection/transformation matrices provided in calib
     
@@ -133,9 +133,10 @@ def render_lidar_on_image(pts_velo, orig_img, calib, img_width, img_height, visu
     # Turn lidar into 2D array
     projected_grid = np.zeros_like(img).astype(float)
     for point in np.transpose(imgfov_pc_cam2):
-        x = point[0]/point[2]
-        y = point[1]/point[2]
-        projected_grid[int(y), int(x)] = point
+        if point[2] < depth_limit:
+            x = point[0]/point[2]
+            y = point[1]/point[2]
+            projected_grid[int(y), int(x)] = point
 
     if visualize:
         cmap = plt.cm.get_cmap('hsv', 256)
@@ -162,96 +163,6 @@ def render_lidar_on_image(pts_velo, orig_img, calib, img_width, img_height, visu
         
     return imgfov_pc_cam2, projected_grid
 
-def render_pointcloud_from_projection(image, projected_points, calib, image_width, image_height):
-    # Get image to cam 2 frame transform
-    image_transform = project_image_to_cam2(calib)
-    
-    # Apply back-projection: K_inv @ pixels * depth
-    # doing it this way because it is the same process if you just have the projected lidar point x,y and then depth value
-    #   (projected_points/projected_points[2, :]) = homogenous coordinates -> N count of [x, y, 1] points
-    #   projected_points[2, :] = depth value
-    cam_coords = image_transform[:3, :3] @ (projected_points/projected_points[2, :]) * projected_points[2, :]
-
-    # Get projection from camera coordinates to velodyne coordinates
-    proj_mat = project_cam2_to_velo(calib)
-    
-    # apply projection
-    velo_points = project_camera_to_lidar(cam_coords, proj_mat)
-    print('2D to 3D VELO POINTS: ', velo_points.shape)
-    
-    # Visualize
-    pcd = open3d.geometry.PointCloud()
-    pcd.points = open3d.utility.Vector3dVector(np.transpose(velo_points))
-    open3d.visualization.draw_geometries([pcd],
-                                         front=[-0.9945, 0.03873, 0.0970],
-                                         lookat=[38.4120, 0.6139, 0.48500],
-                                         up=[0.095457, -0.0421, 0.99453],
-                                         zoom=0.33799
-                                         )
-    return velo_points
-    
-def render_pointcloud_from_bb_segmentation(image, projected_points, calib, image_width, image_height):
-    # manually chosen bounding boxes in form [topleft x/y, topright x/y, bottomleft x/y, bottomright x/y]
-    # bb 1 (leftmost minivan):                          
-    bb1 = [(185, 183), (300, 183), (185, 240), (300, 240)]
-    # bb 2 (person next to traffic light in median):    
-    bb2 = [(442, 167), (474, 167), (442, 255), (474, 255)]
-    # bb 3 (car in middle of image):                    
-    bb3 = [(589, 189), (668, 189), (589, 252), (668, 252)]
-    # bb 4 (pedestrian with bike):                      
-    bb4 = [(905, 173), (996, 173), (905, 267), (996, 267)]
-    bb_list = [bb1, bb2, bb3, bb4]    
-    # bb_list = [bb3]
-
-    # Get image to cam 2 frame transform
-    image_transform = project_image_to_cam2(calib)
-    
-    pts_2d = projected_points/projected_points[2, :]
-    
-    # Get only the points within bounding boxes
-    bb_inds = within_bb_indices(bb_list, pts_2d)
-    inds = []
-    for idx in bb_inds:
-        inds.extend(idx)
-    
-    bb_pts_2d = pts_2d[:, inds]
-    
-    # Apply back-projection: K_inv @ pixels * depth
-    # doing it this way because it is the same process if you just have the projected lidar point x,y and then depth value
-    #   (projected_points/projected_points[2, :]) = homogenous coordinates -> N count of [x, y, 1] points
-    #   projected_points[2, :] = depth value
-    cam_coords = image_transform[:3, :3] @ bb_pts_2d * projected_points[2, inds]
-
-    # Get projection from camera coordinates to velodyne coordinates
-    proj_mat = project_cam2_to_velo(calib)
-    
-    # apply projection
-    velo_points = project_camera_to_lidar(cam_coords, proj_mat)
-    print('2D to 3D VELO POINTS: ', velo_points.shape)
-    
-    # Create Open3D point cloud
-    pcd = open3d.geometry.PointCloud()
-    pcd.points = open3d.utility.Vector3dVector(np.transpose(velo_points))
-    
-    # Run DBSCAN on point cloud
-    with open3d.utility.VerbosityContextManager(open3d.utility.VerbosityLevel.Debug) as cm:
-        labels = np.array(pcd.cluster_dbscan(eps=1, min_points=20, print_progress=True))
-
-    # Set colors of point cloud to see DBSCAN clusters
-    max_label = labels.max()
-    print(f"point cloud has {max_label + 1} clusters")
-    colors = plt.get_cmap("tab20")(labels / (max_label if max_label > 0 else 1))
-    colors[labels < 0] = 0
-    pcd.colors = open3d.utility.Vector3dVector(colors[:, :3])
-    
-    # Visualize
-    open3d.visualization.draw_geometries([pcd],
-                                         front=[-0.9945, 0.03873, 0.0970],
-                                         lookat=[38.4120, 0.6139, 0.48500],
-                                         up=[0.095457, -0.0421, 0.99453],
-                                         zoom=0.33799
-                                         )
-    return velo_points    
 
 def segment_bb_frustum_from_projected_pcd(detections, projected_points, projected_grid, calib, labels=[], visualize=False, orig_img = None):
     """
@@ -266,24 +177,27 @@ def segment_bb_frustum_from_projected_pcd(detections, projected_points, projecte
     # Get only the points within bounding boxes
     # Only need this for only bounding box segmentation, not required for mask propagation
     # inds = within_bb_indices(detections, projected_points/projected_points[2,:])
-    
+    bb_inds = within_bb_indices(detections, projected_points/projected_points[2,:])
+
     # Non parallel
-    for i in range(len(detections)): 
-        if detections[i]['mask'] is not None:
+    for i, detection in enumerate(detections): 
+        # mask propagation
+        if 'mask' in detection.keys() and detection['mask'] is not None:
             # Get indicies where detection mask is true and projected points is non zero
-            mask_inds = np.where(((detections[i]['mask'][:, :] == True) & ((projected_grid[:,:,0] > 0) | (projected_grid[:,:,1] > 0) | (projected_grid[:,:,2] > 0))))
+            mask_inds = np.where(((detection['mask'][:, :] == True) & ((projected_grid[:,:,0] > 0) | (projected_grid[:,:,1] > 0) | (projected_grid[:,:,2] > 0))))
+            object_pts_2d = np.transpose(projected_grid[mask_inds])
 
-            # mask_bb_pts_2d = np.transpose(np.array([projected_grid[y, x] for (y,x) in zip(mask_inds[0], mask_inds[1]) if max(projected_grid[y, x]) != 0]))
-            mask_bb_pts_2d = np.transpose(projected_grid[mask_inds])
+        # bounding box
+        # elif 'bb' in detection.keys() and detection['bb'] is not None:
+        if 'bb' in detection.keys() and detection['bb'] is not None:            
+            object_pts_2d = projected_points[:, bb_inds[i]]
 
-        if mask_bb_pts_2d.shape[0] == 3 and mask_bb_pts_2d.shape[1] > 0:
-            if visualize:
-                if mask_points_list is None:
-                    mask_points_list = mask_bb_pts_2d/mask_bb_pts_2d[2]
-                else:
-                    mask_points_list = np.append(mask_points_list, mask_bb_pts_2d/mask_bb_pts_2d[2], axis=1)
-
-            cam_coords = image_transform[:3, :3] @ mask_bb_pts_2d
+        else:
+            print('ERROR: no bounding box or mask detected')
+            raise NotImplementedError
+        
+        if object_pts_2d.shape[0] == 3 and object_pts_2d.shape[1] > 0:
+            cam_coords = image_transform[:3, :3] @ object_pts_2d
 
             # Get projection from camera coordinates to velodyne coordinates
             proj_mat = project_cam2_to_velo(calib)
@@ -301,17 +215,6 @@ def segment_bb_frustum_from_projected_pcd(detections, projected_points, projecte
             pcd = open3d.geometry.PointCloud()
             pcd.points = open3d.utility.Vector3dVector(np.transpose(detection['frustum_pcd']))
             o3d_pcd_list.append(pcd)
-
-        # print('MP_PCD_LIST: ', mp_pcd_list)
-
-    # print(mask_points_list.shape)
-    # if visualize:
-    #     mask_points_list = []
-    #     fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-    #     ax.clear()
-    #     ax.imshow(orig_img)
-    #     ax.scatter(mask_points_list[0, :], mask_points_list[1, :], s=1, c='red')
-    #     plt.show()
 
     if visualize:
         open3d.visualization.draw_geometries(o3d_pcd_list + labels,
@@ -335,7 +238,7 @@ def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=False):
     pcd.points = open3d.utility.Vector3dVector(pointcloud)
     
     # Run RANSAC
-    model, inliers = pcd.segment_plane(distance_threshold=0.1,ransac_n=3, num_iterations=100)
+    model, inliers = pcd.segment_plane(distance_threshold=0.12,ransac_n=3, num_iterations=100)
 
     # Get the average inlier coorindate values
     average_inlier = np.mean(pointcloud[inliers], axis=0)
@@ -362,17 +265,98 @@ def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=False):
     return np.reshape(segmented_pointcloud, (-1, 3))
 
 
-def apply_dbscan(pointcloud, keep_n=None, visualize=False):
+def get_cluster_scores(cluster_list, detection, weights = [1.0, 1.0, 1.0, 1.0], use_autodrive_classes = False):
+    
+    proj_velo2cam2 = project_velo_to_cam2(detection['calib'])
+    cluster_losses = []
+    for i, cluster in enumerate(cluster_list):
+        loss_list = []
+        if use_autodrive_classes:
+            obj_list = get_autodrive_classes()
+        else:
+            obj_list = get_used_coco_classes()
+        # Compare 3D extent of cluster vs car, truck, pedestrian avg size
+        avg_volume = []
+        
+        # Compare 3D proportions vs average proportions
+        ############################################################
+        # Average height
+        ############################################################
+        avg_height = [1.64592, .856, 2, 4.1148, 2, 4.1148, 4.572, 1.27, 1.8, 1.4, 1, 4]
+        class_idx = obj_list.index(get_coco_class(detection['class']))
+        
+        cluster_3d_bb = cluster.get_axis_aligned_bounding_box()
+        cluster_height = cluster_3d_bb.get_half_extent()[2]
+        
+        loss = weights[0]*(cluster_height-avg_height[class_idx])**2
+        loss_list.append(loss)
+        
+        ############################################################
+        # 2D extent
+        ############################################################
+        cluster_points = np.array(cluster.points)
+        
+        # apply projection
+        pts_2d = project_to_image(cluster_points.transpose(), proj_velo2cam2)
+
+        # Filter out pixels points
+        imgfov_pc_pixel = pts_2d
+        
+        # Retrieve depth from lidar
+        imgfov_pc_velo = cluster_points
+        
+        # make homoegenous
+        imgfov_pc_velo = np.hstack((imgfov_pc_velo, np.ones((imgfov_pc_velo.shape[0], 1))))
+
+        # Project lidar points onto image
+        imgfov_pc_cam2 = proj_velo2cam2 @ imgfov_pc_velo.transpose()
+        
+        # Turn lidar into 2D array
+        min_x = float('inf')
+        max_x = -float('inf')
+        min_y = float('inf')
+        max_y = -float('inf')
+        for point in np.transpose(imgfov_pc_cam2):
+            x = point[0]/point[2]
+            y = point[1]/point[2]
+            if x < min_x: min_x = x
+            elif x > max_x: max_x = x
+            if y < min_y: min_y = y
+            elif y > max_y: max_y = y 
+            
+        cluster_extent_x = max_x - min_x
+        cluster_extent_y = max_y - min_y
+        
+        bb_extent_x = detection['bb'][1][0] - detection['bb'][0][0]
+        bb_extent_y = detection['bb'][2][1] - detection['bb'][0][1]
+        
+        IoU = (cluster_extent_x*cluster_extent_y)/(bb_extent_x*bb_extent_y)
+        
+        cluster_extent_score=weights[1]*1/IoU**2
+        loss_list.append(cluster_extent_score)
+        
+        # Cluster centroid distances relative to % of 2D extent
+        
+        # Cluster centroid distance from frustum centroid
+        # Cluster centroid distance from car
+
+        cluster_losses.append(np.sum(np.array(loss_list)))
+    
+    return cluster_losses
+
+
+def apply_dbscan(pointcloud, detection, keep_n=5, visualize=True):
     """
     Applies DBSCAN on the provided point cloud and returns the Open3D point cloud
     """
+    
     # Create Open3D point cloud
     pcd = open3d.geometry.PointCloud()
     pcd.points = open3d.utility.Vector3dVector(np.transpose(pointcloud))
-    
+        
     # Run DBSCAN on point cloud
     # with open3d.utility.VerbosityContextManager(open3d.utility.VerbosityLevel.Debug) as cm:
-    labels = np.array(pcd.cluster_dbscan(eps=.6, min_points=5))
+    labels = np.array(pcd.cluster_dbscan(eps=1, min_points=10))
 
     # Set colors of point cloud to see DBSCAN clusters
     max_label = labels.max()
@@ -380,18 +364,18 @@ def apply_dbscan(pointcloud, keep_n=None, visualize=False):
     colors = plt.get_cmap("tab20")(labels / (max_label if max_label > 0 else 1))
     colors[labels < 0] = 0
     pcd.colors = open3d.utility.Vector3dVector(colors[:, :3])
-    
     counts = collections.Counter(labels)
         
+    # Get top n clusters
     pcd_list = []
-    if not keep_n:
-        for label in range(labels.max()+1):
-            if not label < 0:
-                pcd_list.append(pcd.select_down_sample(np.argwhere(labels==label))) # select_by_index() again
-    else:
-        for label, count in counts.most_common(keep_n):
-            if not label < 0:
-                pcd_list.append(pcd.select_down_sample(np.argwhere(labels==label))) # again
+    for label, count in counts.most_common(keep_n):
+        if not label < 0:
+            pcd_list.append(pcd.select_down_sample(np.argwhere(labels==label))) # select_by_index() instead
+
+    if pcd_list:
+        cluster_losses = get_cluster_scores(pcd_list, detection)
+        object_candidate_cluster_idx = np.argmin(cluster_losses)
+        pcd_list = [pcd_list[object_candidate_cluster_idx]]
         
     if visualize:
         # Visualize
@@ -419,6 +403,7 @@ def generate_3d_bb(pcd_list, detections, oriented=False, visualize=False):
         open3d.visualization.draw_geometries(display_list)
         
     return generated_bb_list
+
 
 def detection_analysis(detections, labels):
 
@@ -550,6 +535,7 @@ def compare_generation_accuracy(comp_list, visualize=False):
         if visualize:
             open3d.visualization.draw_geometries(comp + [pointcloud_center, generated_center, groundtruth_center])
 
+
 def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, ground_removal = True):
     """
     Runs 3D object detection 
@@ -578,29 +564,28 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, gr
     #############################################################################
     # PROJECT KITTI GT POINTCLOUD POINTS ONTO IMAGE
     #############################################################################
-
     (projected_pcd_points, projected_pcd_grid), metrics['3d_to_2d_projection_time'] = time_function(render_lidar_on_image, (ground_remove_pcd, image, calib, image.shape[1], image.shape[0]), {'visualize': use_vis})
     
     metrics['total_time'] += metrics['3d_to_2d_projection_time']
     
+    
     #############################################################################
     # SEGMENT FRUSTUMS 
     #############################################################################
-
     segmented_pcds, metrics['frustum_segmentation_time'] = time_function(segment_bb_frustum_from_projected_pcd, (detection_info, projected_pcd_points, projected_pcd_grid, calib), {'labels': labels['kitti_gt_3d_bb'], 'visualize': use_vis, 'orig_img': image})
     
     metrics['total_time'] += metrics['frustum_segmentation_time']
 
+
     #############################################################################
     # APPLY DBSCAN CLUSTERING TO EACH FRUSTUM 
     #############################################################################
-
     object_candidate_clusters = []
     metrics['dbscan_clustering_time'] = 0
 
     for i, segmented_pcd in enumerate(segmented_pcds):
         if detection_info[i]['frustum_pcd'] is not None:
-            object_candidate_cluster, execution_time = time_function(apply_dbscan, (segmented_pcd,), {'keep_n': 1, 'visualize': False})
+            object_candidate_cluster, execution_time = time_function(apply_dbscan, (segmented_pcd, detection_info[i]), {'keep_n': 3, 'visualize': False})
             object_candidate_clusters.extend(object_candidate_cluster)
             detection_info[i]['object_candidate_cluster'] = object_candidate_cluster
 
@@ -610,13 +595,13 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, gr
     
     metrics['total_time'] += metrics['dbscan_clustering_time']
 
+
     #############################################################################
     # GENERATE 3D BOUNDING BOXES 
     #############################################################################
-
     generated_3d_bb_list, metrics['3d_bounding_box_generation_time'] = time_function(generate_3d_bb, (object_candidate_clusters, detection_info), {'visualize': use_vis})
     
-    metrics['total_time'] += metrics['3d_bounding_box_generation_time']
+    metrics['total_time'] += metrics['3d_bounding_box_generation_time'] 
 
     if 'ground_removal_time' in metrics.keys():
         print(f'{"Ground Removal Time":<30}: {metrics["ground_removal_time"]:.>5.4f} s.')
@@ -699,7 +684,8 @@ def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False):
             # RUN DETECTION
             #############################################################################
             labels={'kitti_gt_3d_bb': kitti_gt_3d_bb, 'kitti_gt_labels': kitti_gt_labels}
-            mr_detections = [{'frame': file, 'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
+            mr_detections = [{'calib':kitti_gt_calib, 'frame': file, 'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
+            # mr_detections = [{'frame': file, 'class': cls, 'bb': bb} for cls, bb in zip(mr_inf_labels, mr_inf_2d_bb_list)]
             
             generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(kitti_gt_calib, kitti_gt_image, kitti_gt_pointcloud, mr_detections, labels, use_vis)
             
@@ -722,7 +708,7 @@ def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False):
                 with open(f'detection/maskrcnn_Car_train/{str(key).zfill(4)}.txt', "a", newline="") as f:
                     writer = csv.writer(f)
                     writer.writerows(cars)
-                        
+                            
 
             #############################################################################
             # VISUALIZE RESULTS FOR SCENE
@@ -730,42 +716,41 @@ def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False):
             if use_vis:
                 mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
                 open3d.visualization.draw_geometries(clustered_kitti_gt_pcd_list + kitti_gt_3d_bb + generated_3d_bb_list + [mesh_frame])
+
+        # #############################################################################
+        # # GET TEST METRICS
+        # #############################################################################
+        # if detection_metrics['total_time'] > test_metrics['max_scene_time']:
+        #     test_metrics['max_scene_time'] = detection_metrics['total_time']
+        # if detection_metrics['total_time'] < test_metrics['min_scene_time']:
+        #     test_metrics['min_scene_time'] = detection_metrics['total_time']
+        # test_metrics['avg_scene_time'] += detection_metrics['total_time']
         
+        # detection_metrics['avg_time_per_detection'] = detection_metrics['total_time']/len(mr_inf_labels)
+        # if detection_metrics['avg_time_per_detection'] > test_metrics['max_individual_detection_time']:
+        #     test_metrics['max_individual_detection_time'] = detection_metrics['avg_time_per_detection']
+        # if detection_metrics['avg_time_per_detection'] < test_metrics['min_individual_detection_time']:
+        #     test_metrics['min_individual_detection_time'] = detection_metrics['avg_time_per_detection']
+        # test_metrics['avg_individual_detection_time'] += detection_metrics['avg_time_per_detection']
+        # test_metrics['total_detections'] += len(mr_inf_labels)
 
-            #############################################################################
-            # GET TEST METRICS
-            #############################################################################
-            if detection_metrics['total_time'] > test_metrics['max_scene_time']:
-                test_metrics['max_scene_time'] = detection_metrics['total_time']
-            if detection_metrics['total_time'] < test_metrics['min_scene_time']:
-                test_metrics['min_scene_time'] = detection_metrics['total_time']
-            test_metrics['avg_scene_time'] += detection_metrics['total_time']
-            
-            detection_metrics['avg_time_per_detection'] = detection_metrics['total_time']/len(mr_inf_labels)
-            if detection_metrics['avg_time_per_detection'] > test_metrics['max_individual_detection_time']:
-                test_metrics['max_individual_detection_time'] = detection_metrics['avg_time_per_detection']
-            if detection_metrics['avg_time_per_detection'] < test_metrics['min_individual_detection_time']:
-                test_metrics['min_individual_detection_time'] = detection_metrics['avg_time_per_detection']
-            test_metrics['avg_individual_detection_time'] += detection_metrics['avg_time_per_detection']
-            test_metrics['total_detections'] += len(mr_inf_labels)
+        # test_metrics[f'kitti_scene_{str(file).zfill(6)}_inference_metrics'] = detection_metrics
 
-            test_metrics[f'kitti_scene_{str(file).zfill(6)}_inference_metrics'] = detection_metrics
-
-            print(f'\nFile {str(file).zfill(6)} Object Detection {"Total Execution Time":<40}: {detection_metrics["total_time"]:.>5.4f} s.')
-            print(f'File {str(file).zfill(6)} Object Detection {"Avg Inference Time/Detection":<40}: {detection_metrics["avg_time_per_detection"]:.>5.4f} s.')
-            print(f'Finished Running file {str(file).zfill(6)} Object Detection')
+        # print(f'\nFile {str(file).zfill(6)} Object Detection {"Total Execution Time":<40}: {detection_metrics["total_time"]:.>5.4f} s.')
+        # print(f'File {str(file).zfill(6)} Object Detection {"Avg Inference Time/Detection":<40}: {detection_metrics["avg_time_per_detection"]:.>5.4f} s.')
+        # print(f'Finished Running file {str(file).zfill(6)} Object Detection')
 
 
-            #############################################################################
-            # RUN ACCURACY ANALYSIS
-            #############################################################################
-            print(f'Starting Running file {str(file).zfill(6)} Detection Analysis')
-            analysis_metrics = detection_analysis(detection_info, labels)
-            print(f'Finished Running file {str(file).zfill(6)} Detection Analysis')
+        # #############################################################################
+        # # RUN ACCURACY ANALYSIS
+        # #############################################################################
+        # print(f'Starting Running file {str(file).zfill(6)} Detection Analysis')
+        # analysis_metrics = detection_analysis(detection_info, labels)
+        # print(f'Finished Running file {str(file).zfill(6)} Detection Analysis')
 
-            test_metrics[f'kitti_scene_{str(file).zfill(6)}_analysis_metrics'] = analysis_metrics
+        # test_metrics[f'kitti_scene_{str(file).zfill(6)}_analysis_metrics'] = analysis_metrics
 
-            print('='*50)
+        # print('='*50)
         
     test_metrics["avg_individual_detection_time"] = float(test_metrics["avg_individual_detection_time"])/test_metrics["total_detections"]
     test_metrics["avg_scene_time"] = float(test_metrics["avg_scene_time"])/len(test_list)

@@ -209,8 +209,11 @@ def read_calib_file(filepath):
 
     return data
 
-def kitti_coco_class_mapping(cls, transform=0):
-    COCO_CLASSES = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
+def get_autodrive_classes():
+    return ['person', 'rider', 'car', 'truck', 'bus', 'train', 'motorcycle', 'bicycle', 'traffic light', 'traffic sign', 'animal']
+
+def get_coco_classes():
+    return ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
                'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
                'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',
                'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',
@@ -224,48 +227,27 @@ def kitti_coco_class_mapping(cls, transform=0):
                'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
                'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
                'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
-    KITTI_CLASSES = ['Car', 'Van', 'Truck',
+
+def get_used_coco_classes():
+    return ['person', 'car', 'bus', 'truck', 'train']
+
+def kitti_coco_class_mapping(cls, transform=0):
+    coco_classes = get_coco_classes()
+    kitti_classes = ['Car', 'Van', 'Truck',
                      'Pedestrian', 'Person_sitting', 'Cyclist', 'Tram',
                      'Misc', 'DontCare']
 
-    KITTI_TO_COCO = {'Car': ['car', 'bus', 'truck'], 'Van': ['car', 'bus', 'truck', 'train'], 'Truck': ['car', 'bus', 'truck', 'train'], 'Pedestrian': ['person'], 'Person_sitting': ['person'], 'Cyclist': ['person'], 'Tram': ['car', 'bus', 'truck', 'train'], 'Misc': COCO_CLASSES}
+    kitti_to_coco = {'Car': ['car', 'bus', 'truck'], 'Van': ['car', 'bus', 'truck', 'train'], 'Truck': ['car', 'bus', 'truck', 'train'], 'Pedestrian': ['person'], 'Person_sitting': ['person'], 'Cyclist': ['person'], 'Tram': ['car', 'bus', 'truck', 'train'], 'Misc': coco_classes}
     
-    return KITTI_TO_COCO[cls]
+    return kitti_to_coco[cls]
 
 def get_coco_class(class_idx):
-    CLASSES = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
-               'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
-               'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',
-               'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',
-               'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
-               'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',
-               'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
-               'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
-               'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',
-               'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
-               'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
-               'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
-               'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
-               'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
-
-    return CLASSES[class_idx]
+    classes = get_coco_classes()
+    return classes[class_idx]
 
 def remove_extra_coco_detections(bbox, segmentation, label):
-    CLASSES = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
-               'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
-               'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',
-               'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',
-               'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
-               'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',
-               'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
-               'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
-               'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',
-               'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
-               'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
-               'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
-               'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
-               'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
-    indices = np.argwhere((label == CLASSES.index('person')) | (label == CLASSES.index('car')) | (label == CLASSES.index('bus')) | (label == CLASSES.index('truck')) | (label == CLASSES.index('train'))).flatten()
+    classes = get_coco_classes()
+    indices = np.argwhere((label == classes.index('person')) | (label == classes.index('car')) | (label == classes.index('bus')) | (label == classes.index('truck')) | (label == classes.index('train'))).flatten()
     removed_bbox = bbox[indices]
     removed_segmentation = segmentation[indices]
     removed_label = label[indices]
