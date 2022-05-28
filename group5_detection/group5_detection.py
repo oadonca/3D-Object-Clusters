@@ -3,13 +3,13 @@ from operator import truediv
 import os
 import time
 import matplotlib.pyplot as plt
-from numpy import true_divide
+from numpy import average, outer, true_divide
 import open3d
 import itertools
 import collections
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Polygon
-from matplotlib import patches
+from matplotlib import patches, cm
 import multiprocessing as mp
 import json
 import argparse
@@ -98,88 +98,182 @@ def render_lidar_with_boxes(pc_velo, objects, calib, img_width, img_height, dbsc
                                          )
 
 
-def render_lidar_on_image(pts_velo, orig_img, calib, img_width, img_height, depth_limit = 40, visualize=True):
+def render_lidar_on_image(pts_velo, orig_img, calib, img_width, img_height, depth_limit = 100, visualize=True, autodrive=True):
     """
     Projects the given lidar points onto the given image using the projection/transformation matrices provided in calib
     
     Returns: Image and projected points
     """
-    
     img = np.copy(orig_img)
     # projection matrix (project from velo2cam2)
-    proj_velo2cam2 = project_velo_to_cam2(calib)
-
-    # apply projection
-    pts_2d = project_to_image(pts_velo.transpose(), proj_velo2cam2)
-    # Can extrapole this process to remove lidar points that are outside of 2D bounding boxes
-    # Filter lidar points to be within image FOV
-    inds = np.where((pts_2d[0, :] < img_width) & (pts_2d[0, :] >= 0) &
-                    (pts_2d[1, :] < img_height) & (pts_2d[1, :] >= 0) &
-                    (pts_velo[:, 0] > 0)
-                    )[0]
-
-    # Filter out pixels points
-    imgfov_pc_pixel = pts_2d[:, inds]
-    
-    # Retrieve depth from lidar
-    imgfov_pc_velo = pts_velo[inds, :]
-    
-    # make homoegenous
-    imgfov_pc_velo = np.hstack((imgfov_pc_velo, np.ones((imgfov_pc_velo.shape[0], 1))))
-
-    # Project lidar points onto image
-    imgfov_pc_cam2 = proj_velo2cam2 @ imgfov_pc_velo.transpose()
-    
-    # Turn lidar into 2D array
-    projected_grid = np.zeros_like(img).astype(float)
-    for point in np.transpose(imgfov_pc_cam2):
-        if point[2] < depth_limit:
-            x = point[0]/point[2]
-            y = point[1]/point[2]
-            projected_grid[int(y), int(x)] = point
-
-    if visualize:
-        cmap = plt.cm.get_cmap('hsv', 256)
-        cmap = np.array([cmap(i) for i in range(256)])[:, :3] * 255
-        # Display projected point cloud on the image
-        for i in range(imgfov_pc_pixel.shape[1]):
-            depth = imgfov_pc_cam2[2, i]
-            color = cmap[min(int(640.0 / depth), 255), :]
-            cv2.circle(img, (int(np.round(imgfov_pc_cam2[0, i]/imgfov_pc_cam2[2, i])),
-                            int(np.round(imgfov_pc_cam2[1, i]/imgfov_pc_cam2[2, i]))),
-                    2, color=tuple(color), thickness=-1)
-            
-        fig, ax = plt.subplots(2, 1, figsize=(5, 10))
-
-        ax[0].set_title('Original Image')
-        ax[0].imshow(orig_img)
-
-        ax[1].set_title('Image w/ Projected Points')
-        ax[1].imshow(img)
-
-        plt.yticks([])
-        plt.xticks([])
-        plt.savefig('render_lidar_on_image.png')
+    if autodrive:        
         
-    return imgfov_pc_cam2, projected_grid
+        # [x, y, z, 1] -> [x, y, z, w]
+        # transform poins from velo frame to camera frame
+        # make homogenous
+        # print('PointCloud XYZ: ', pts_velo.shape)
+        
+        pts_velo_homogeneous = np.hstack((pts_velo, np.ones((pts_velo.shape[0], 1))))
+        # print('PointCloud XYZ pad One: ', pts_velo_homogeneous.shape)
+
+        transform_mat = np.transpose(calib['ad_transform_mat'])
+        # print('tform: \n', transform_mat)
+       
+        # Lidar points in camera frame
+        pts_cam_frame = transform_mat @ np.transpose(pts_velo_homogeneous)
+        # print('cameraXYZ before delete: ', pts_cam_frame.shape)
+        pts_cam_frame = np.delete(pts_cam_frame, 3, 0)
+        # print('cameraXYZ after delete: ', pts_cam_frame.shape)
+
+        # [x, y, z, w] -> [x, y, w]
+        # then project points from camera frame onto image plane
+        # print('intrinsics: \n', np.transpose(calib['ad_projection_mat']))
+        pts_image_plane = np.transpose(calib['ad_projection_mat']) @ pts_cam_frame
+        
+        # print('image_uv: ', pts_image_plane.shape)
+        # print(pts_image_plane/pts_image_plane[2])
+                
+        projected_grid = np.zeros_like(img).astype(float)
+        for point in np.transpose(pts_image_plane):
+            if point[2] < depth_limit:
+                x = point[0]/point[2]
+                y = point[1]/point[2]
+                projected_grid[int(y), int(x)] = point
+        
+        if visualize:   
+            # cmap = plt.cm.get_cmap('hsv', 256)
+            # cmap = np.array([cmap(i) for i in range(256)])[:, :3] * 255
+            # # Display projected point cloud on the image
+            # for i in range(pts_cam_frame.shape[1]):
+            #     depth = pts_image_plane[2, i]
+            #     color = cmap[min(int(640.0 / depth), 255), :]
+            #     cv2.circle(img, (int(np.round(pts_image_plane[0, i]/pts_image_plane[2, i])),
+            #                     int(np.round(pts_image_plane[1, i]/pts_image_plane[2, i]))),
+            #             2, color=tuple(color), thickness=-1)
+                
+            plt.imshow(orig_img)
+            plt.scatter(pts_image_plane[0]/pts_image_plane[2], pts_image_plane[1]/pts_image_plane[2], s=1, color='red')
+            plt.show()
+            
+            plt.imshow(orig_img)
+            plt.imshow(projected_grid)
+            plt.show()
+            
+            points_list = []
+            for y, row in enumerate(projected_grid):
+                for x, col in enumerate(row):
+                    if x > 503 and x < 817 and y > 589 and y < 690:
+                        points_list.append(projected_grid[y][x])
+                        
+            pcd = open3d.geometry.PointCloud()
+            points = np.array(points_list)
+            pcd.points = open3d.utility.Vector3dVector(points)
+
+            open3d.visualization.draw_geometries([pcd],
+                                         front=[-0.9945, 0.03873, 0.0970],  
+                                         lookat=[38.4120, 0.6139, 0.48500],
+                                         up=[0.095457, -0.0421, 0.99453],
+                                         zoom=0.33799
+                                         )   
+            
+            # Image plane 2D to Camera frame 3D            
+            inv_projection = np.linalg.inv(np.transpose(calib['ad_projection_mat']))
+            cam_coords = inv_projection @ pts_image_plane
+            
+            # Camera frame to lidar sensor frame
+            cam_coords = np.vstack((cam_coords, np.ones((1, cam_coords.shape[1]))))
+            inv_transform = np.linalg.inv(np.transpose(calib['ad_transform_mat']))
+            velo_points = inv_transform @ cam_coords
+            velo_points = velo_points[:3, :]
+            
+            pcd = open3d.geometry.PointCloud()
+            points = np.transpose(velo_points)
+            pcd.points = open3d.utility.Vector3dVector(points)
+
+            open3d.visualization.draw_geometries([pcd],
+                                         front=[-0.9945, 0.03873, 0.0970],  
+                                         lookat=[38.4120, 0.6139, 0.48500],
+                                         up=[0.095457, -0.0421, 0.99453],
+                                         zoom=0.33799
+                                         )
+                                
+        return pts_image_plane, projected_grid
+        
+    else:    
+        proj_velo2cam2 = project_velo_to_cam2(calib)
+
+        # apply projection
+        pts_2d = project_to_image(pts_velo.transpose(), proj_velo2cam2, autodrive)
+        inds = np.where((pts_2d[0, :] < img_width) & (pts_2d[0, :] >= 0) &
+                        (pts_2d[1, :] < img_height) & (pts_2d[1, :] >= 0) &
+                        (pts_velo[:, 0] > 0)
+                        )[0]
+
+        # Filter out pixels points
+        imgfov_pc_pixel = pts_2d[:, inds]
+        # Retrieve depth from lidar
+        imgfov_pc_velo = pts_velo[inds, :]
+        
+        # make homoegenous
+        imgfov_pc_velo = np.hstack((imgfov_pc_velo, np.ones((imgfov_pc_velo.shape[0], 1))))
+
+        # Project lidar points onto image
+        imgfov_pc_cam2 = proj_velo2cam2 @ imgfov_pc_velo.transpose()
+
+        # Turn lidar into 2D array
+        projected_grid = np.zeros_like(img).astype(float)
+        for point in np.transpose(imgfov_pc_cam2):
+            if point[2] < depth_limit:
+                x = point[0]/point[2]
+                y = point[1]/point[2]
+                projected_grid[int(y), int(x)] = point
+
+        if visualize:
+            cmap = plt.cm.get_cmap('hsv', 256)
+            cmap = np.array([cmap(i) for i in range(256)])[:, :3] * 255
+            # Display projected point cloud on the image
+            for i in range(imgfov_pc_pixel.shape[1]):
+                depth = imgfov_pc_cam2[2, i]
+                color = cmap[min(int(640.0 / depth), 255), :]
+                cv2.circle(img, (int(np.round(imgfov_pc_cam2[0, i]/imgfov_pc_cam2[2, i])),
+                                int(np.round(imgfov_pc_cam2[1, i]/imgfov_pc_cam2[2, i]))),
+                        2, color=tuple(color), thickness=-1)
+                
+            fig, ax = plt.subplots(2, 1, figsize=(5, 10))
+
+            ax[0].set_title('Original Image')
+            ax[0].imshow(orig_img)
+
+            ax[1].set_title('Image w/ Projected Points')
+            ax[1].imshow(img)
+
+            plt.yticks([])
+            plt.xticks([])
+            plt.savefig('render_lidar_on_image.png')
+            
+        return imgfov_pc_cam2, projected_grid
 
 
-def segment_bb_frustum_from_projected_pcd(detections, projected_points, projected_grid, calib, labels=[], visualize=False, orig_img = None):
+def segment_bb_frustum_from_projected_pcd(detections, projected_points, projected_grid, calib, labels_info=None, visualize=False, orig_img = None, autodrive=True):
     """
     Given a np array of projected 2D points and a list of bounding boxes, 
     Removes all points outside the frustums generated by the provided bounding boxes
     
     Returns: A list of pointclouds for each segmented frustum
     """
+    if labels_info is not None:
+        labels = labels_info['kitti_gt_3d_bb']
+    
     # Get image to cam 2 frame transform
-    image_transform = project_image_to_cam2(calib)
+    if not autodrive:
+        image_transform = project_image_to_cam2(calib, autodrive)
     
     # Get only the points within bounding boxes
     # Only need this for only bounding box segmentation, not required for mask propagation
-    # inds = within_bb_indices(detections, projected_points/projected_points[2,:])
-    bb_inds = within_bb_indices(detections, projected_points/projected_points[2,:])
-
+    bb_inds = within_bb_indices(detections, projected_points/projected_points[2], autodrive)
+    
     # Non parallel
+    mask_points_list = []
     for i, detection in enumerate(detections): 
         # mask propagation
         if 'mask' in detection.keys() and detection['mask'] is not None:
@@ -194,38 +288,93 @@ def segment_bb_frustum_from_projected_pcd(detections, projected_points, projecte
         else:
             print('ERROR: no bounding box or mask detected')
             raise NotImplementedError
-        
+                
         if object_pts_2d.shape[0] == 3 and object_pts_2d.shape[1] > 0:
-            cam_coords = image_transform[:3, :3] @ object_pts_2d
+            if autodrive:
+                # Image plane 2D to Camera frame 3D
+                inv_projection = np.linalg.inv(np.transpose(calib['ad_projection_mat']))
+                cam_coords = inv_projection @ object_pts_2d
+                
+                # Camera frame to lidar sensor frame
+                cam_coords = np.vstack((cam_coords, np.ones((1, cam_coords.shape[1]))))
+                inv_transform = np.linalg.inv(np.transpose(calib['ad_transform_mat']))
+                velo_points = inv_transform @ cam_coords
+                velo_points = velo_points[:3, :]
+                
+                if visualize:
+                    mask_points_list.append(object_pts_2d)
+                
+            else:   
+                cam_coords = image_transform[:3, :3] @ object_pts_2d
 
-            # Get projection from camera coordinates to velodyne coordinates
-            proj_mat = project_cam2_to_velo(calib)
-            
-            # apply projection
-            velo_points = project_camera_to_lidar(cam_coords, proj_mat)
+                # Get projection from camera coordinates to velodyne coordinates
+                proj_mat = project_cam2_to_velo(calib, autodrive)
+                
+                # apply projection
+                velo_points = project_camera_to_lidar(cam_coords, proj_mat)
         
-            detections[i]['frustum_pcd'] = velo_points
+            detections[i]['frustum_pcd'] = np.array(velo_points)
         else:
             detections[i]['frustum_pcd'] = None
-    
-    if visualize:
-        o3d_pcd_list = []
-        for detection in detections:
+        
+    if autodrive and visualize:
+        for pts in mask_points_list:
+            fig, ax = plt.subplots(1, 1, figsize=(5, 5))
+            ax.clear()
+            ax.imshow(orig_img)
+            ax.scatter(pts[0, :]/pts[2,:], pts[1, :]/pts[2,:], s=1, c='red')
+            plt.show()
+            
+            # Image plane 2D to Camera frame 3D
+            inv_projection = np.linalg.inv(np.transpose(calib['ad_projection_mat']))
+            cam_coords = inv_projection @ pts
+            
             pcd = open3d.geometry.PointCloud()
-            pcd.points = open3d.utility.Vector3dVector(np.transpose(detection['frustum_pcd']))
-            o3d_pcd_list.append(pcd)
-
-    if visualize:
-        open3d.visualization.draw_geometries(o3d_pcd_list + labels,
+            points = np.transpose(cam_coords)
+            pcd.points = open3d.utility.Vector3dVector(points)
+            open3d.visualization.draw_geometries([pcd],
+                                         front=[-0.9945, 0.03873, 0.0970],  
+                                         lookat=[38.4120, 0.6139, 0.48500],
+                                         up=[0.095457, -0.0421, 0.99453],
+                                         zoom=0.33799
+                                         )
+            
+            # Camera frame to lidar sensor frame
+            cam_coords = np.vstack((cam_coords, np.ones((1, cam_coords.shape[1]))))
+            inv_transform = np.linalg.inv(np.transpose(calib['ad_transform_mat']))
+            velo_points = inv_transform @ cam_coords
+            velo_points = velo_points[:3, :]
+            
+            pcd = open3d.geometry.PointCloud()
+            points = np.transpose(velo_points)
+            pcd.points = open3d.utility.Vector3dVector(points)
+            open3d.visualization.draw_geometries([pcd],
                                          front=[-0.9945, 0.03873, 0.0970],  
                                          lookat=[38.4120, 0.6139, 0.48500],
                                          up=[0.095457, -0.0421, 0.99453],
                                          zoom=0.33799
                                          )
         
+    if visualize:
+        o3d_pcd_list = []
+        for detection in detections:
+            if detection['frustum_pcd'] is not None:
+                pcd = open3d.geometry.PointCloud()
+                points = np.transpose(detection['frustum_pcd'])
+                pcd.points = open3d.utility.Vector3dVector(points)
+                o3d_pcd_list.append(pcd)
+
+    if visualize:
+        if autodrive:
+            pcd_display_list = o3d_pcd_list
+        else:
+            pcd_display_list = o3d_pcd_list + labels
+            
+        open3d.visualization.draw_geometries(pcd_display_list)
+        
     return [detection['frustum_pcd'] for detection in detections]
 
-def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=False):
+def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=False, autodrive=True):
     """
     Removes ground points from provided pointcloud
     
@@ -237,17 +386,16 @@ def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=False):
     pcd.points = open3d.utility.Vector3dVector(pointcloud)
     
     # Run RANSAC
-    model, inliers = pcd.segment_plane(distance_threshold=0.12,ransac_n=3, num_iterations=100)
-
+    model, inliers = pcd.segment_plane(distance_threshold=0.12,ransac_n=3, num_iterations=200)
     # Get the average inlier coorindate values
     average_inlier = np.mean(pointcloud[inliers], axis=0)
 
     # Remove inliers
     segmented_pointcloud = np.delete(pointcloud, inliers, axis=0)
-        
-    # Remove points below average inlier z value
-    mask = np.argwhere(segmented_pointcloud[:, 2] < average_inlier[2]+removal_offset)
-    segmented_pointcloud = np.delete(segmented_pointcloud, mask, axis=0)
+    if not autodrive:        
+        # Remove points below average inlier z value
+        mask = np.argwhere(segmented_pointcloud[:, 2] < average_inlier[2]+removal_offset)
+        segmented_pointcloud = np.delete(segmented_pointcloud, mask, axis=0)
     
     if visualize:
         # Visualize
@@ -344,11 +492,12 @@ def get_cluster_scores(cluster_list, detection, weights = [1.0, 1.0, 1.0, 1.0], 
     return cluster_losses
 
 
-def apply_dbscan(pointcloud, detection, keep_n=5, visualize=True):
+def apply_dbscan(pointcloud, detection, keep_n=5, visualize=True, autodrive=True):
     """
     Applies DBSCAN on the provided point cloud and returns the Open3D point cloud
     """
-    
+    if autodrive:
+        keep_n = 1
     # Create Open3D point cloud
     pcd = open3d.geometry.PointCloud()
     pcd.points = open3d.utility.Vector3dVector(np.transpose(pointcloud))
@@ -503,39 +652,8 @@ def detection_analysis(detections, labels):
 
     return analysis_metrics
 
-def compare_generation_accuracy(comp_list, visualize=False):    
-    # comp format: [point cloud, ground truth bb, generated bb]
-    for i, comp in enumerate(comp_list):
-        centers = [item.get_center() for item in comp]
 
-        pointcloud_to_groundtruth_center_distance = np.linalg.norm(np.array(centers[1]) - np.array(centers[0]))
-        generated_to_groundtruth_center_distance = np.linalg.norm(np.array(centers[1]) - np.array(centers[2]))
-        groundtruth_to_lidar_distance = np.linalg.norm(np.array(centers[1]) - np.array([0, 0, 0]))
-
-        print(f'Item {i+1} {"Object Pointcloud Center to Groundtruth BB Distance:":<50} {pointcloud_to_groundtruth_center_distance:>10.4f} m')
-        print(f'Item {i+1} {"Generated BB Center to Groundtruth BB Distance:":<50} {generated_to_groundtruth_center_distance:>10.4f} m')
-        print(f'Item {i+1} {"Groundtruth BB Center to LiDAR Distance:":<50} {groundtruth_to_lidar_distance:>10.4f} m')
-
-        # Point cloud
-        pointcloud_center = open3d.geometry.PointCloud()
-        pointcloud_center.points = open3d.utility.Vector3dVector(np.array([centers[0]]))
-        pointcloud_center.paint_uniform_color([0, 0, 1.0]) 
-        
-        # Generated BB
-        generated_center = open3d.geometry.PointCloud()
-        generated_center.points = open3d.utility.Vector3dVector(np.array([centers[1]]))
-        generated_center.paint_uniform_color([1.0, 0, 0]) 
-        
-        # Groundtruth BB
-        groundtruth_center = open3d.geometry.PointCloud()
-        groundtruth_center.points = open3d.utility.Vector3dVector(np.array([centers[2]]))
-        groundtruth_center.paint_uniform_color([0, 1.0, 0]) 
-        
-        if visualize:
-            open3d.visualization.draw_geometries(comp + [pointcloud_center, generated_center, groundtruth_center])
-
-
-def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, use_mask = False):
+def run_detection(calib, image, pcd, bb_list, labels=None, use_vis = False, use_mask = False, autodrive=True):
     """
     Runs 3D object detection 
 
@@ -548,12 +666,23 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, us
     """
     metrics = dict()
     metrics['total_time'] = 0
+        
+    if autodrive:
+        detection_info = list()
+        for bb in bb_list:
+            detection = dict() 
+            detection['bb'] = bb[:4]
+            detection['class'] = bb[4]
+            detection['confidence'] = bb[5]
+            detection_info.append(detection)
+    else:
+        detection_info = bb_list
 
     #############################################################################
     # REMOVE GROUND 
     #############################################################################
     if not use_mask:
-        ground_remove_pcd, metrics['ground_removal_time'] = time_function(remove_ground, (pcd,), {'labels': labels['kitti_gt_3d_bb'], 'removal_offset': .075, 'visualize': use_vis})
+        ground_remove_pcd, metrics['ground_removal_time'] = time_function(remove_ground, (pcd,), {'removal_offset': 0, 'visualize': use_vis, 'autodrive': autodrive})
         
         metrics['total_time'] += metrics['ground_removal_time']
     else:
@@ -563,18 +692,17 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, us
     #############################################################################
     # PROJECT KITTI GT POINTCLOUD POINTS ONTO IMAGE
     #############################################################################
-    (projected_pcd_points, projected_pcd_grid), metrics['3d_to_2d_projection_time'] = time_function(render_lidar_on_image, (ground_remove_pcd, image, calib, image.shape[1], image.shape[0]), {'visualize': use_vis})
+    (projected_pcd_points, projected_pcd_grid), metrics['3d_to_2d_projection_time'] = time_function(render_lidar_on_image, (ground_remove_pcd, image, calib, image.shape[1], image.shape[0]), {'visualize': use_vis, 'autodrive': autodrive})
     
     metrics['total_time'] += metrics['3d_to_2d_projection_time']
-    
+
     
     #############################################################################
     # SEGMENT FRUSTUMS 
     #############################################################################
-    segmented_pcds, metrics['frustum_segmentation_time'] = time_function(segment_bb_frustum_from_projected_pcd, (detection_info, projected_pcd_points, projected_pcd_grid, calib), {'labels': labels['kitti_gt_3d_bb'], 'visualize': use_vis, 'orig_img': image})
+    segmented_pcds, metrics['frustum_segmentation_time'] = time_function(segment_bb_frustum_from_projected_pcd, (detection_info, projected_pcd_points, projected_pcd_grid, calib), {'labels_info': labels, 'visualize': use_vis, 'orig_img': image, 'autodrive': autodrive})
     
     metrics['total_time'] += metrics['frustum_segmentation_time']
-
 
     #############################################################################
     # APPLY DBSCAN CLUSTERING TO EACH FRUSTUM 
@@ -594,7 +722,6 @@ def run_detection(calib, image, pcd, detection_info, labels, use_vis = False, us
             detection_info[i]['object_candidate_cluster'] = None
     
     metrics['total_time'] += metrics['dbscan_clustering_time']
-
 
     #############################################################################
     # GENERATE 3D BOUNDING BOXES 
@@ -620,7 +747,7 @@ def prepare_tracking_files(scene_list):
         scene_dict[str(scene)] = files
     return scene_dict
 
-def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False, use_mask = False):
+def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False, use_mask = False, autodrive=False):
     if tracking:
         scenes = prepare_tracking_files(file_num)
     else:
@@ -690,7 +817,7 @@ def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False, use_mask 
             else:
                 mr_detections = [{'calib': kitti_gt_calib, 'frame': file, 'class': cls, 'bb': bb} for cls, bb in zip(mr_inf_labels, mr_inf_2d_bb_list)]
             
-            generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(kitti_gt_calib, kitti_gt_image, kitti_gt_pointcloud, mr_detections, labels, use_vis, use_mask)
+            generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(kitti_gt_calib, kitti_gt_image, kitti_gt_pointcloud, mr_detections, labels, use_vis, use_mask, autodrive)
             
             
             #############################################################################
@@ -742,7 +869,6 @@ def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False, use_mask 
             print(f'File {str(file).zfill(6)} Object Detection {"Avg Inference Time/Detection":<40}: {detection_metrics["avg_time_per_detection"]:.>5.4f} s.')
             print(f'Finished Running file {str(file).zfill(6)} Object Detection')
 
-
             # #############################################################################
             # # RUN ACCURACY ANALYSIS
             # #############################################################################
@@ -768,7 +894,32 @@ def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False, use_mask 
     print(f'3D Object Detection {"Max Inference Time Per Detection":<40}: {test_metrics["max_individual_detection_time"]:.>5.4f} s.')
     
     json.dump(test_metrics, open('kitti_test_metrics.json', 'w'), cls=DetectionEncoder)
-
+        
+def test_autodrive_scenes(file_num = 0, use_vis = False, tracking = False, use_mask = False):
+    
+    # Load project mat
+    intrinsics_path = 'autodrive/intrinsics_zed.mat'
+    extrinsics_path = 'autodrive/tform5.24.mat'
+    
+    calib = dict()
+    calib['ad_transform_mat'], calib['ad_projection_mat'] = load_ad_projection_mats(intrinsics_path, extrinsics_path)
+    
+    # Load AD files
+    image_path = 'autodrive/sensor_data/image/image231.npy'
+    bb_path = 'autodrive/sensor_data/bb/image231_obj.npy'
+    pcd_path = 'autodrive/sensor_data/pcd/pcd231.npy'
+    image, bb_list, pcd = load_ad_files(image_path, bb_path, pcd_path)
+        
+    pcd = np.array(pcd)
+    
+    generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(calib, image, pcd, bb_list, None, use_vis=False, use_mask=False)
+    
+    if use_vis:
+        mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
+        open3d.visualization.draw_geometries(clustered_kitti_gt_pcd_list + generated_3d_bb_list + [mesh_frame])
+    
+    pass
+    
         
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -799,4 +950,5 @@ if __name__ == '__main__':
         19,
         20
     ]
-    test_kitti_scenes(test_list, arguments.vis, arguments.tracking, arguments.use_mask)
+    # test_kitti_scenes(test_list, arguments.vis, arguments.tracking, arguments.use_mask, autodrive=False)
+    test_autodrive_scenes(0, True)

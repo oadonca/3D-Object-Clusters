@@ -11,6 +11,7 @@ import time
 import json
 import pickle
 import re
+import scipy.io as sio
 
 class Box3D(object):
     """
@@ -90,34 +91,42 @@ def project_velo_to_cam2(calib):
     proj_mat = P_rect2cam2 @ R_ref2rect @ P_velo2cam_ref
     return proj_mat
 
-def project_image_to_cam2(calib):
-    P_rect2cam2 = calib['P2'].reshape((3, 4))
-    # Create square matrix
-    P_rect2cam2 = np.vstack((P_rect2cam2, np.array([0., 0., 0., 1.])))
+def project_image_to_cam2(calib, autodrive):
+    if autodrive:
+        P_rect2cam2 = np.transpose(calib['ad_transfrom_mat'])
+    else:   
+        P_rect2cam2 = calib['P2'].reshape((3, 4))
+        # Create square matrix
+        P_rect2cam2 = np.vstack((P_rect2cam2, np.array([0., 0., 0., 1.])))
     # Get rectified frame to cam2 image frame inverse i.e. cam2 image to rectified transform
     P_rect2cam2_inv = np.linalg.inv(P_rect2cam2)
     
     return P_rect2cam2_inv
 
-def project_cam2_to_velo(calib):
+# transform
+def project_cam2_to_velo(calib, autodrive=True):
     R_ref2rect = np.eye(4)
-    if 'R_rect' in calib:
-        R0_rect = calib['R_rect'].reshape(3, 3)  # ref_cam2rect
-    else:
-        R0_rect = calib['R0_rect'].reshape(3, 3)  # ref_cam2rect
-    R_ref2rect[:3, :3] = R0_rect
-    R_ref2rect_inv = np.linalg.inv(R_ref2rect)  # rect2ref_cam
+    if autodrive:
+        proj_mat = np.linalg.inv(np.transpose(calib['ad_transfrom_mat']))
 
-    # inverse rigid transformation
-    velo_tmp = calib['Tr_velo_cam'] if 'Tr_velo_cam' in calib else calib['Tr_velo_to_cam']
-    velo2cam_ref = np.vstack((velo_tmp.reshape(3, 4), np.array([0., 0., 0., 1.])))  # velo2ref_cam
-    P_cam_ref2velo = np.linalg.inv(velo2cam_ref)
+    else:  
+        if 'R_rect' in calib:
+            R0_rect = calib['R_rect'].reshape(3, 3)  # ref_cam2rect
+        else:
+            R0_rect = calib['R0_rect'].reshape(3, 3)  # ref_cam2rect
+        R_ref2rect[:3, :3] = R0_rect
+        R_ref2rect_inv = np.linalg.inv(R_ref2rect)  # rect2ref_cam
 
-    proj_mat = P_cam_ref2velo @ R_ref2rect_inv
+        # inverse rigid transformation
+        velo_tmp = calib['Tr_velo_cam'] if 'Tr_velo_cam' in calib else calib['Tr_velo_to_cam']
+        velo2cam_ref = np.vstack((velo_tmp.reshape(3, 4), np.array([0., 0., 0., 1.])))  # velo2ref_cam
+        P_cam_ref2velo = np.linalg.inv(velo2cam_ref)
+
+        proj_mat = P_cam_ref2velo @ R_ref2rect_inv
     return proj_mat
 
 
-def project_to_image(points, proj_mat):
+def project_to_image(points, proj_mat, autodrive=True):
     """
     Apply the perspective projection
     Args:
@@ -128,9 +137,11 @@ def project_to_image(points, proj_mat):
 
     # Change to homogenous coordinate
     points = np.vstack((points, np.ones((1, num_pts))))
-
     # Apply projection
-    points = proj_mat @ points
+    if autodrive:
+        points = np.transpose(proj_mat) @ points
+    else:
+        points = proj_mat @ points
 
     # Convert back to nonhomogenous coordinates
     points[:2, :] /= points[2, :]
@@ -147,8 +158,10 @@ def project_camera_to_lidar(points, proj_mat):
         points in lidar coordinate:     [3, npoints]
     """
     num_pts = points.shape[1]
+    print('proj mat\n\n',proj_mat)
     # Change to homogenous coordinate
     points = np.vstack((points, np.ones((1, num_pts))))
+    print(points.shape)
     points = proj_mat @ points
     return points[:3, :]
 
@@ -357,18 +370,27 @@ def roty(t):
                      [0, 1, 0],
                      [-s, 0, c]])
     
-def within_bb_indices(detections, points):
+def within_bb_indices(detections, points, autodrive=True):
     """
     Returns an list of lists of indices for each bounding box
     """
     inds = []
-    
-    for detection in detections:
-        x_range = [detection['bb'][0][0], detection['bb'][1][0]]
-        y_range = [detection['bb'][0][1], detection['bb'][2][1]]
-        inds.append(np.where((points[0, :] < x_range[1]) & (points[0, :] >= x_range[0]) &
-                        (points[1, :] < y_range[1]) & (points[1, :] >= y_range[0])
-                        )[0])
+    if autodrive:
+        for detection in detections:
+            x_range = [int(detection['bb'][0]), int(detection['bb'][2])]
+            y_range = [int(detection['bb'][1]), int(detection['bb'][3])]            
+            ind = np.where((points[0, :] < x_range[1]) & (points[0, :] >= x_range[0]) &
+                            (points[1, :] < y_range[1]) & (points[1, :] >= y_range[0])
+                            )[0]
+            inds.append(ind)
+    else:   
+        for detection in detections:
+            x_range = [detection['bb'][0][0], detection['bb'][1][0]]
+            y_range = [detection['bb'][0][1], detection['bb'][2][1]]
+            inds.append(np.where((points[0, :] < x_range[1]) & (points[0, :] >= x_range[0]) &
+                            (points[1, :] < y_range[1]) & (points[1, :] >= y_range[0])
+                            )[0]
+                        )
         
     return inds
 
@@ -615,3 +637,15 @@ def get_ab3dmot_format(detection_info):
         
     return frame_input
     
+def load_ad_projection_mats(intrinsics_path, extrinsics_path):
+    intrinsics_mat = sio.loadmat(intrinsics_path, squeeze_me=True)['intrinsics'].item()[6]
+    extrinsics_mat = sio.loadmat(extrinsics_path, squeeze_me=True)['tform'].item()[1]
+    
+    return extrinsics_mat, intrinsics_mat
+
+def load_ad_files(image_path, bb_path, pcd_path):
+    image = np.load(image_path)
+    bb_list = np.load(bb_path)
+    pcd = np.load(pcd_path)
+    
+    return image, bb_list, pcd
