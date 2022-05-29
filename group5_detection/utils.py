@@ -41,6 +41,7 @@ class Box3D(object):
         self.t = (data[11], data[12], data[13])  # location (x,y,z) in camera coord.
         self.ry = data[14]  # yaw angle (around Y-axis in camera coordinates) [-pi..pi]
 
+
     def in_camera_coordinate(self, is_homogenous=False):
         # 3d bounding box dimensions
         l = self.l
@@ -67,6 +68,7 @@ class Box3D(object):
 
         return points_3d
 
+
 class DetectionEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, np.ndarray):
@@ -91,6 +93,7 @@ def project_velo_to_cam2(calib):
     proj_mat = P_rect2cam2 @ R_ref2rect @ P_velo2cam_ref
     return proj_mat
 
+
 def project_image_to_cam2(calib, autodrive):
     if autodrive:
         P_rect2cam2 = np.transpose(calib['ad_transfrom_mat'])
@@ -102,6 +105,7 @@ def project_image_to_cam2(calib, autodrive):
     P_rect2cam2_inv = np.linalg.inv(P_rect2cam2)
     
     return P_rect2cam2_inv
+
 
 # transform
 def project_cam2_to_velo(calib, autodrive=True):
@@ -225,6 +229,7 @@ def read_calib_file(filepath):
 def get_autodrive_classes():
     return ['person', 'rider', 'car', 'truck', 'bus', 'train', 'motorcycle', 'bicycle', 'traffic light', 'traffic sign', 'animal']
 
+
 def get_coco_classes():
     return ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
                'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
@@ -244,6 +249,7 @@ def get_coco_classes():
 def get_used_coco_classes():
     return ['person', 'car', 'bus', 'truck', 'train']
 
+
 def kitti_coco_class_mapping(cls, transform=0):
     coco_classes = get_coco_classes()
     kitti_classes = ['Car', 'Van', 'Truck',
@@ -254,9 +260,11 @@ def kitti_coco_class_mapping(cls, transform=0):
     
     return kitti_to_coco[cls]
 
+
 def get_coco_class(class_idx):
     classes = get_coco_classes()
     return classes[class_idx]
+
 
 def remove_extra_coco_detections(bbox, segmentation, label):
     classes = get_coco_classes()
@@ -266,6 +274,7 @@ def remove_extra_coco_detections(bbox, segmentation, label):
     removed_label = label[indices]
     
     return removed_bbox, removed_segmentation, removed_label
+
 
 def load_kitti_groundtruth(file_num = 0, scene = "None"):
     calibs = []
@@ -301,6 +310,7 @@ def load_kitti_groundtruth(file_num = 0, scene = "None"):
             print(f'Error loading inference artifacts for scene {str(scene).zfill(4)} and file {str(file_num).zfill(6)}')
 
     return images, pointclouds, labels, calibs
+
 
 def load_mask_rcnn_inference(file_num = 0, scene = "None"):
     bboxes = []
@@ -360,6 +370,7 @@ def load_mask_rcnn_inference(file_num = 0, scene = "None"):
 
     return images, bboxes, segmentations, labels
 
+
 def roty(t):
     """
     Rotation about the y-axis.
@@ -369,7 +380,8 @@ def roty(t):
     return np.array([[c, 0, s],
                      [0, 1, 0],
                      [-s, 0, c]])
-    
+
+
 def within_bb_indices(detections, points, autodrive=True):
     """
     Returns an list of lists of indices for each bounding box
@@ -413,6 +425,7 @@ def draw_projected_box3d(image, qs, color=(255, 255, 255), thickness=1):
 
     return image
 
+
 def bitmap_to_polygon(bitmap):
     """Convert masks from the form of bitmaps to polygons.
     Args:
@@ -439,6 +452,7 @@ def bitmap_to_polygon(bitmap):
     with_hole = (hierarchy.reshape(-1, 4)[:, 3] >= 0).any()
     contours = [c.reshape(-1, 2) for c in contours]
     return contours, with_hole
+
 
 def get_bias_color(base, max_dist=30):
     """Get different colors for each masks.
@@ -483,6 +497,7 @@ def get_groundtruth_3d_bb(objects, calib, oriented = True):
     
     return bb_list
 
+
 def get_groundtruth_2d_bb():
     # manually chosen bounding boxes in form [topleft x/y, topright x/y, bottomleft x /y, bottomright x/y]
     # bb 1 (leftmost minivan):                          
@@ -498,6 +513,7 @@ def get_groundtruth_2d_bb():
     bb_list = [bb1, bb2, bb3, bb4, bb5]   
     
     return bb_list
+
 
 def get_detector_2d_bb(mask_bboxes, image = None, visualize=True):    
     # print('MASK BOXES\n', mask_bboxes)
@@ -515,6 +531,7 @@ def get_detector_2d_bb(mask_bboxes, image = None, visualize=True):
         plt.show()
         
     return bb_list
+
 
 def get_bb_centers(bb):
     """
@@ -548,6 +565,7 @@ def get_bb_centers(bb):
 
     return arr
 
+
 def draw_masks(img, masks, color = None, with_edge = True, alpha = 0.8):
     fig, ax = plt.subplots(1, 1, figsize=(10, 5))
     ax.imshow(img)
@@ -577,11 +595,193 @@ def draw_masks(img, masks, color = None, with_edge = True, alpha = 0.8):
         
     plt.show()
 
+
 def time_function(function, args = (), kwargs = {}):
     start = time.perf_counter()
     func_return = function(*args, **kwargs)
     end = time.perf_counter() - start
     return func_return, end
+
+
+def detection_analysis(detections, labels):
+  
+    analysis_metrics = dict()
+
+    print('='*50)
+    analysis_metrics['total_detections']  = 0
+    analysis_metrics['total_correct_detections'] = 0
+    for i, kitti_3d_bb in enumerate(labels['kitti_gt_3d_bb']):
+        print('.'*100)
+        analysis_metrics[f'box_{i}'] = dict()
+        analysis_metrics[f'box_{i}']['kitti_bb_class'] = labels['kitti_gt_labels'][i].type
+        analysis_metrics[f'box_{i}']['kitti_3d_bb_center'] = kitti_3d_bb.get_center()
+        analysis_metrics[f'box_{i}']['kitti_3d_bb_face_centers'] = get_bb_centers(kitti_3d_bb)
+        
+        # Get the closest box
+        analysis_metrics[f'box_{i}']['closest_generated_box'] = None
+        analysis_metrics[f'box_{i}']['closest_generated_box_coco_class'] = None
+        analysis_metrics[f'box_{i}']['closest_generated_center'] = None
+        analysis_metrics[f'box_{i}']['closest_center_distance'] = float('inf')
+        for j, detection in enumerate(detections):
+
+            if 'generated_3d_bb' in detection.keys() and detection['generated_3d_bb'] is not None:
+                detection_coco_class = get_coco_class(detection['class'])
+                generated_3d_bb_center = detection['generated_3d_bb'].get_center()
+                distance = np.linalg.norm(analysis_metrics[f'box_{i}']['kitti_3d_bb_center'] - generated_3d_bb_center)
+
+                if detection_coco_class in kitti_coco_class_mapping(analysis_metrics[f'box_{i}']['kitti_bb_class']) and distance < analysis_metrics[f'box_{i}']['closest_center_distance']:
+                    analysis_metrics[f'box_{i}']['closest_center_distance'] = distance
+                    analysis_metrics[f'box_{i}']['closest_generated_box'] = detection['generated_3d_bb']
+                    analysis_metrics[f'box_{i}']['closest_generated_box_coco_class'] = detection_coco_class
+                    analysis_metrics[f'box_{i}']['closest_generated_center'] = generated_3d_bb_center
+                
+        # Calculate face centers for the KITTI GT box
+        analysis_metrics[f'box_{i}']['kitti_3d_bb_closest_face_center'] = None
+        analysis_metrics[f'box_{i}']['closest_gt_face_center_distance'] = float('inf')
+        for face_center in analysis_metrics[f'box_{i}']['kitti_3d_bb_face_centers']:
+
+            distance = np.linalg.norm(face_center - np.array([0, 0, 0]))
+
+            if distance < analysis_metrics[f'box_{i}']['closest_gt_face_center_distance']:
+                analysis_metrics[f'box_{i}']['closest_gt_face_center_distance'] = distance
+                analysis_metrics[f'box_{i}']['kitti_3d_bb_closest_face_center'] = face_center
+                
+        # Calculate face centers for the closest generated box
+        analysis_metrics[f'box_{i}']['closest_box_face_centers'] = None
+        analysis_metrics[f'box_{i}']['closest_box_closest_face_center'] = None
+        analysis_metrics[f'box_{i}']['closest_box_face_center_distance'] = float('inf')
+        analysis_metrics[f'box_{i}']['closest_face_and_gt_distance'] = float('inf')
+        analysis_metrics[f'box_{i}']['IOU_3d'] = 0.0
+        analysis_metrics[f'box_{i}']['IOU_2d'] = 0.0
+        if analysis_metrics[f'box_{i}']['closest_generated_box'] is not None:
+            analysis_metrics[f'box_{i}']['closest_box_face_centers'] = get_bb_centers(analysis_metrics[f'box_{i}']['closest_generated_box'])
+            for face_center in analysis_metrics[f'box_{i}']['closest_box_face_centers']:
+
+                distance = np.linalg.norm(face_center - np.array([0, 0, 0]))
+
+                if distance < analysis_metrics[f'box_{i}']['closest_box_face_center_distance']:
+                    analysis_metrics[f'box_{i}']['closest_box_face_center_distance'] = distance
+                    analysis_metrics[f'box_{i}']['closest_box_closest_face_center'] = face_center
+                    
+            analysis_metrics[f'box_{i}']['closest_face_and_gt_distance'] = np.linalg.norm(analysis_metrics[f'box_{i}']['closest_box_closest_face_center'] - analysis_metrics[f'box_{i}']['kitti_3d_bb_closest_face_center'])
+            
+            # Calculating 3D IOU
+            kitti_gt_corners = np.asarray(kitti_3d_bb.get_box_points())
+            generated_3d_corners = np.asarray(analysis_metrics[f'box_{i}']['closest_generated_box'].get_box_points())
+
+            # Convert to correct order for IoU
+            kitti_gt_corners = np.array([kitti_gt_corners[4], kitti_gt_corners[7], kitti_gt_corners[2], kitti_gt_corners[5], kitti_gt_corners[6], kitti_gt_corners[1], kitti_gt_corners[0], kitti_gt_corners[3]])
+            generated_3d_corners = np.array([generated_3d_corners[4], generated_3d_corners[7], generated_3d_corners[2], generated_3d_corners[5], generated_3d_corners[6], generated_3d_corners[1], generated_3d_corners[0], generated_3d_corners[3]])
+
+            (analysis_metrics[f'box_{i}']['IOU_3d'],analysis_metrics[f'box_{i}']['IOU_2d'])=box3d_iou(generated_3d_corners,kitti_gt_corners)
+
+        # Determine if detection is correct
+        analysis_metrics[f'box_{i}']['correct_detection'] = False
+        if analysis_metrics[f'box_{i}']['closest_face_and_gt_distance'] is not None and analysis_metrics[f'box_{i}']['closest_face_and_gt_distance'] < 2 and analysis_metrics[f'box_{i}']['closest_generated_box_coco_class'] in kitti_coco_class_mapping(analysis_metrics[f'box_{i}']['kitti_bb_class']):
+            analysis_metrics[f'box_{i}']['correct_detection'] = True
+
+        if analysis_metrics[f'box_{i}']['correct_detection']:
+            analysis_metrics['total_correct_detections'] += 1
+        analysis_metrics['total_detections']  += 1
+
+        print(f'{f"KITTI GT 3D BB #{i} class: ":<50} {analysis_metrics[f"box_{i}"]["kitti_bb_class"]}')        
+        print(f'{f"CLOSEST GENERATED 3D BB coco class: ":<50} {analysis_metrics[f"box_{i}"]["closest_generated_box_coco_class"]}')
+        print(f'{f"KITTI GT 3D BB #{i} center: ":<50} {analysis_metrics[f"box_{i}"]["kitti_3d_bb_center"]} m.')
+        print(f'{f"CLOSEST GENERATED 3D BB center: ":<50} {analysis_metrics[f"box_{i}"]["closest_generated_center"]} m.\n')
+        print(f'{"Smallest distance between bb centers: ":<50} {analysis_metrics[f"box_{i}"]["closest_center_distance"]:.4f} m.')
+        print(f'{"Distance between closest face centers:":<50} {analysis_metrics[f"box_{i}"]["closest_face_and_gt_distance"]:.4f} m.')
+        print(f'{"KITTI GT Closest face center: ":<50} {analysis_metrics[f"box_{i}"]["kitti_3d_bb_closest_face_center"]}')
+        print(f'{"GENERATED Closest face center: ":<50} {analysis_metrics[f"box_{i}"]["closest_box_closest_face_center"]}\n')
+        print(f'{"Closest Box 3D IoU: ":<50} {analysis_metrics[f"box_{i}"]["IOU_3d"]:.4f}')
+        print(f'{"Closest Box 2D IoU: ":<50} {analysis_metrics[f"box_{i}"]["IOU_2d"]:.4f}\n')
+        print(f'{"Detection Correct Class and Within +-2m? ":<50} {analysis_metrics[f"box_{i}"]["correct_detection"]}')
+        print('.'*100)
+
+    print(f'{"Total Correct Detections: ":<50} {analysis_metrics["total_correct_detections"]} Correct/{analysis_metrics["total_detections"]} Total\n')
+    print('='*50)
+
+    return analysis_metrics
+
+
+def get_cluster_scores(cluster_list, detection, weights = [1.0, 1.0, 1.0, 1.0], use_autodrive_classes = False):
+    
+    proj_velo2cam2 = project_velo_to_cam2(detection['calib'])
+    cluster_losses = []
+    for i, cluster in enumerate(cluster_list):
+        loss_list = []
+        if use_autodrive_classes:
+            obj_list = get_autodrive_classes()
+        else:
+            obj_list = get_used_coco_classes()
+        # Compare 3D extent of cluster vs car, truck, pedestrian avg size
+        avg_volume = []
+        
+        # Compare 3D proportions vs average proportions
+        ############################################################
+        # Average height
+        ############################################################
+        avg_height = [1.64592, .856, 2, 4.1148, 2, 4.1148, 4.572, 1.27, 1.8, 1.4, 1, 4]
+        class_idx = obj_list.index(get_coco_class(detection['class']))
+        
+        cluster_3d_bb = cluster.get_axis_aligned_bounding_box()
+        cluster_height = cluster_3d_bb.get_half_extent()[2]
+        
+        loss = weights[0]*(cluster_height-avg_height[class_idx])**2
+        loss_list.append(loss)
+        
+        ############################################################
+        # 2D extent
+        ############################################################
+        cluster_points = np.array(cluster.points)
+        
+        # apply projection
+        pts_2d = project_to_image(cluster_points.transpose(), proj_velo2cam2)
+
+        # Filter out pixels points
+        imgfov_pc_pixel = pts_2d
+        
+        # Retrieve depth from lidar
+        imgfov_pc_velo = cluster_points
+        
+        # make homoegenous
+        imgfov_pc_velo = np.hstack((imgfov_pc_velo, np.ones((imgfov_pc_velo.shape[0], 1))))
+
+        # Project lidar points onto image
+        imgfov_pc_cam2 = proj_velo2cam2 @ imgfov_pc_velo.transpose()
+        
+        # Turn lidar into 2D array
+        min_x = float('inf')
+        max_x = -float('inf')
+        min_y = float('inf')
+        max_y = -float('inf')
+        for point in np.transpose(imgfov_pc_cam2):
+            x = point[0]/point[2]
+            y = point[1]/point[2]
+            if x < min_x: min_x = x
+            elif x > max_x: max_x = x
+            if y < min_y: min_y = y
+            elif y > max_y: max_y = y 
+            
+        cluster_extent_x = max_x - min_x
+        cluster_extent_y = max_y - min_y
+        
+        bb_extent_x = detection['bb'][1][0] - detection['bb'][0][0]
+        bb_extent_y = detection['bb'][2][1] - detection['bb'][0][1]
+        
+        IoU = (cluster_extent_x*cluster_extent_y)/(bb_extent_x*bb_extent_y)
+        
+        cluster_extent_score=weights[1]*1/IoU**2
+        loss_list.append(cluster_extent_score)
+        
+        # Cluster centroid distances relative to % of 2D extent
+        
+        # Cluster centroid distance from frustum centroid
+        # Cluster centroid distance from car
+
+        cluster_losses.append(np.sum(np.array(loss_list)))
+    
+    return cluster_losses
+
 
 def get_ab3dmot_format(detection_info):
     # detection keys: class, bb, mask, frustum_pcd, object_candidate_cluster, generated_3d_bb
@@ -636,12 +836,22 @@ def get_ab3dmot_format(detection_info):
             frame_input.append(final_input)
         
     return frame_input
-    
+
+
 def load_ad_projection_mats(intrinsics_path, extrinsics_path):
     intrinsics_mat = sio.loadmat(intrinsics_path, squeeze_me=True)['intrinsics'].item()[6]
-    extrinsics_mat = sio.loadmat(extrinsics_path, squeeze_me=True)['tform'].item()[1]
+    try:
+        extrinsics_mat = sio.loadmat(extrinsics_path, squeeze_me=True)['tform'].item()[1]
+    except:
+        print('warning: failed to read extrinsics matrix, trying again')
+    
+    try:
+        extrinsics_mat = np.load(extrinsics_path)
+    except:
+        pass
     
     return extrinsics_mat, intrinsics_mat
+
 
 def load_ad_files(image_path, bb_path, pcd_path):
     image = np.load(image_path)
@@ -649,3 +859,18 @@ def load_ad_files(image_path, bb_path, pcd_path):
     pcd = np.load(pcd_path)
     
     return image, bb_list, pcd
+
+
+def prepare_tracking_files(scene_list):
+    scene_dict = {}
+    for scene in scene_list:
+        files = sorted(os.listdir(f'kitti_tracking/training/velodyne/{str(scene).zfill(4)}'))
+        files = [int(os.path.splitext(file)[0]) for file in files]
+        scene_dict[str(scene)] = files
+    return scene_dict
+    
+
+def limit_pcd_depth(pcd, depth_limit):
+    inds = np.where(((pcd[:,0]**2)+(pcd[:,1]**2)+(pcd[:,2]**2))**.5 < depth_limit)
+    return pcd[inds]
+
