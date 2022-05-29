@@ -1,25 +1,13 @@
-from cgi import test
-from operator import truediv
-import os
-import time
 import matplotlib.pyplot as plt
-from numpy import average, outer, true_divide
 import open3d
-import itertools
 import collections
-from matplotlib.collections import PatchCollection
-from matplotlib.patches import Polygon
-from matplotlib import patches, cm
-import multiprocessing as mp
-import json
 import argparse
-import csv
-
+import numpy as np
+import math
 
 from utils import *
 from iou3d import get_3d_box, box3d_iou
-from AB3DMOT.main import main
-from AB3DMOT.AB3DMOT_libs.utils import initialize
+from test_scripts import *
 
 def render_image_with_boxes(img, objects, calib, autodrive):
     """
@@ -365,6 +353,7 @@ def segment_bb_frustum_from_projected_pcd(detections, projected_points, projecte
                 points = np.transpose(detection['frustum_pcd'])
                 pcd.points = open3d.utility.Vector3dVector(points)
                 o3d_pcd_list.append(pcd)
+                open3d.visualization.draw_geometries([pcd])
 
     if visualize:
         if autodrive:
@@ -376,7 +365,7 @@ def segment_bb_frustum_from_projected_pcd(detections, projected_points, projecte
         
     return [detection['frustum_pcd'] for detection in detections]
 
-def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=False, autodrive=True):
+def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=False, autodrive=True, downsample=True):
     """
     Removes ground points from provided pointcloud
     
@@ -386,118 +375,51 @@ def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=False, au
     # Create Open3D pointcloud
     pcd = open3d.geometry.PointCloud()
     pcd.points = open3d.utility.Vector3dVector(pointcloud)
+    if downsample:
+        pcd = pcd.voxel_down_sample(voxel_size=0.05)
     
     # Run RANSAC
-    model, inliers = pcd.segment_plane(distance_threshold=0.12,ransac_n=3, num_iterations=200)
+    model, inliers = pcd.segment_plane(distance_threshold=0.15,ransac_n=3, num_iterations=500)
     # Get the average inlier coorindate values
     average_inlier = np.mean(pointcloud[inliers], axis=0)
 
     # Remove inliers
-    segmented_pointcloud = np.delete(pointcloud, inliers, axis=0)
-    if not autodrive:        
-        # Remove points below average inlier z value
-        mask = np.argwhere(segmented_pointcloud[:, 2] < average_inlier[2]+removal_offset)
-        segmented_pointcloud = np.delete(segmented_pointcloud, mask, axis=0)
+    segmented_pointcloud = pcd.select_by_index(inliers, invert=True)
+    segmented_pointcloud_points = np.array(segmented_pointcloud.points)
+    
+    distance_to_plane = lambda x,y,z: (model[0]*x + model[1]*y + model[2]*z + model[3])/np.sqrt(np.sum(np.square(model[:3])))
+    # Remove points below plane
+    mask_inds = np.where(distance_to_plane(segmented_pointcloud_points[:, 0], segmented_pointcloud_points[:, 1], segmented_pointcloud_points[:, 2]) < removal_offset)
+    segmented_pointcloud = segmented_pointcloud.select_by_index(mask_inds[0], invert=True)
+    segmented_pointcloud_points = np.array(segmented_pointcloud.points)
     
     if visualize:
         # Visualize
         inlier_cloud = pcd.select_down_sample(inliers) # use select_by_index() depending on version of open3d
         inlier_cloud.paint_uniform_color([1.0, 0, 0])
-        outlier_cloud = pcd.select_down_sample(inliers, invert=True) # same as above
-        outlier_cloud.paint_uniform_color([0, 0, 1.0])
-        open3d.visualization.draw_geometries([inlier_cloud, outlier_cloud] + labels,
+        outlier_cloud = pcd.select_by_index(inliers, invert=True) # same as above
+        outlier_cloud.paint_uniform_color([0, 1.0, 0.0])
+        open3d.visualization.draw_geometries([inlier_cloud + outlier_cloud] + labels,
+                                    zoom=0.8,
+                                    front=[-0.4999, -0.1659, -0.8499],
+                                    lookat=[2.1813, 2.0619, 2.0999],
+                                    up=[0.1204, -0.9852, 0.1215])
+        open3d.visualization.draw_geometries([segmented_pointcloud] + labels,
                                     zoom=0.8,
                                     front=[-0.4999, -0.1659, -0.8499],
                                     lookat=[2.1813, 2.0619, 2.0999],
                                     up=[0.1204, -0.9852, 0.1215])
     
-    return np.reshape(segmented_pointcloud, (-1, 3))
+    return np.reshape(segmented_pointcloud_points, (-1, 3))
 
 
-def get_cluster_scores(cluster_list, detection, weights = [1.0, 1.0, 1.0, 1.0], use_autodrive_classes = False):
-    
-    proj_velo2cam2 = project_velo_to_cam2(detection['calib'])
-    cluster_losses = []
-    for i, cluster in enumerate(cluster_list):
-        loss_list = []
-        if use_autodrive_classes:
-            obj_list = get_autodrive_classes()
-        else:
-            obj_list = get_used_coco_classes()
-        # Compare 3D extent of cluster vs car, truck, pedestrian avg size
-        avg_volume = []
-        
-        # Compare 3D proportions vs average proportions
-        ############################################################
-        # Average height
-        ############################################################
-        avg_height = [1.64592, .856, 2, 4.1148, 2, 4.1148, 4.572, 1.27, 1.8, 1.4, 1, 4]
-        class_idx = obj_list.index(get_coco_class(detection['class']))
-        
-        cluster_3d_bb = cluster.get_axis_aligned_bounding_box()
-        cluster_height = cluster_3d_bb.get_half_extent()[2]
-        
-        loss = weights[0]*(cluster_height-avg_height[class_idx])**2
-        loss_list.append(loss)
-        
-        ############################################################
-        # 2D extent
-        ############################################################
-        cluster_points = np.array(cluster.points)
-        
-        # apply projection
-        pts_2d = project_to_image(cluster_points.transpose(), proj_velo2cam2, use_autodrive_classes)
-
-        # Filter out pixels points
-        imgfov_pc_pixel = pts_2d
-        
-        # Retrieve depth from lidar
-        imgfov_pc_velo = cluster_points
-        
-        # make homoegenous
-        imgfov_pc_velo = np.hstack((imgfov_pc_velo, np.ones((imgfov_pc_velo.shape[0], 1))))
-
-        # Project lidar points onto image
-        imgfov_pc_cam2 = proj_velo2cam2 @ imgfov_pc_velo.transpose()
-        
-        # Turn lidar into 2D array
-        min_x = float('inf')
-        max_x = -float('inf')
-        min_y = float('inf')
-        max_y = -float('inf')
-        for point in np.transpose(imgfov_pc_cam2):
-            x = point[0]/point[2]
-            y = point[1]/point[2]
-            if x < min_x: min_x = x
-            elif x > max_x: max_x = x
-            if y < min_y: min_y = y
-            elif y > max_y: max_y = y 
-            
-        cluster_extent_x = max_x - min_x
-        cluster_extent_y = max_y - min_y
-        
-        bb_extent_x = detection['bb'][1][0] - detection['bb'][0][0]
-        bb_extent_y = detection['bb'][2][1] - detection['bb'][0][1]
-        
-        IoU = (cluster_extent_x*cluster_extent_y)/(bb_extent_x*bb_extent_y)
-        
-        cluster_extent_score=weights[1]*1/IoU**2
-        loss_list.append(cluster_extent_score)
-        
-        # Cluster centroid distances relative to % of 2D extent
-        
-        # Cluster centroid distance from frustum centroid
-        # Cluster centroid distance from car
-
-        cluster_losses.append(np.sum(np.array(loss_list)))
-    
-    return cluster_losses
-
-
-def apply_dbscan(pointcloud, detection, keep_n=5, visualize=True, autodrive=True):
+def apply_dbscan(detection, keep_n=5, visualize=True, autodrive=True):
     """
     Applies DBSCAN on the provided point cloud and returns the Open3D point cloud
     """
+    
+    pointcloud = detection['frustum_pcd']
+    
     if autodrive:
         keep_n = 1
     # Create Open3D point cloud
@@ -531,131 +453,34 @@ def apply_dbscan(pointcloud, detection, keep_n=5, visualize=True, autodrive=True
         # Visualize
         open3d.visualization.draw_geometries([pcd])
     
-    return pcd_list
+    if pcd_list:
+        detection['object_candidate_cluster'] = pcd_list[0]
+        return pcd_list[0]
+   
+    detection['object_candidate_cluster'] = None
+    return None
 
-def generate_3d_bb(pcd_list, detections, oriented=False, visualize=False):
+def generate_3d_bb(detections, oriented=False, visualize=False):
     """
     Generates bounding boxes around each point cloud in pcd_list
     """
     generated_bb_list = []
-    for i, pcd in enumerate(pcd_list):
-        if detections[i]['object_candidate_cluster'] is not None and np.max(np.array(pcd.colors)) > 0:
-            bb = pcd.get_axis_aligned_bounding_box() if not oriented else pcd.get_oriented_bounding_box()
+    for i, detection in enumerate(detections):
+        if detection['object_candidate_cluster'] is not None and np.max(np.array(detection['object_candidate_cluster'].colors)) > 0:
+            bb = detection['object_candidate_cluster'].get_axis_aligned_bounding_box() if not oriented else detection['object_candidate_cluster'].get_oriented_bounding_box()
             bb.color = [1.0, 0, 0]
             generated_bb_list.append(bb)
             detections[i]['generated_3d_bb'] = bb
         else:
             detections[i]['generated_3d_bb'] = None
-        
-    display_list = pcd_list + generated_bb_list
-        
+                
     if visualize:
-        open3d.visualization.draw_geometries(display_list)
+        open3d.visualization.draw_geometries(generated_bb_list)
         
     return generated_bb_list
 
 
-def detection_analysis(detections, labels):
-
-    analysis_metrics = dict()
-
-    print('='*50)
-    analysis_metrics['total_detections']  = 0
-    analysis_metrics['total_correct_detections'] = 0
-    for i, kitti_3d_bb in enumerate(labels['kitti_gt_3d_bb']):
-        print('.'*100)
-        analysis_metrics[f'box_{i}'] = dict()
-        analysis_metrics[f'box_{i}']['kitti_bb_class'] = labels['kitti_gt_labels'][i].type
-        analysis_metrics[f'box_{i}']['kitti_3d_bb_center'] = kitti_3d_bb.get_center()
-        analysis_metrics[f'box_{i}']['kitti_3d_bb_face_centers'] = get_bb_centers(kitti_3d_bb)
-        
-        # Get the closest box
-        analysis_metrics[f'box_{i}']['closest_generated_box'] = None
-        analysis_metrics[f'box_{i}']['closest_generated_box_coco_class'] = None
-        analysis_metrics[f'box_{i}']['closest_generated_center'] = None
-        analysis_metrics[f'box_{i}']['closest_center_distance'] = float('inf')
-        for j, detection in enumerate(detections):
-
-            if 'generated_3d_bb' in detection.keys() and detection['generated_3d_bb'] is not None:
-                detection_coco_class = get_coco_class(detection['class'])
-                generated_3d_bb_center = detection['generated_3d_bb'].get_center()
-                distance = np.linalg.norm(analysis_metrics[f'box_{i}']['kitti_3d_bb_center'] - generated_3d_bb_center)
-
-                if detection_coco_class in kitti_coco_class_mapping(analysis_metrics[f'box_{i}']['kitti_bb_class']) and distance < analysis_metrics[f'box_{i}']['closest_center_distance']:
-                    analysis_metrics[f'box_{i}']['closest_center_distance'] = distance
-                    analysis_metrics[f'box_{i}']['closest_generated_box'] = detection['generated_3d_bb']
-                    analysis_metrics[f'box_{i}']['closest_generated_box_coco_class'] = detection_coco_class
-                    analysis_metrics[f'box_{i}']['closest_generated_center'] = generated_3d_bb_center
-                
-        # Calculate face centers for the KITTI GT box
-        analysis_metrics[f'box_{i}']['kitti_3d_bb_closest_face_center'] = None
-        analysis_metrics[f'box_{i}']['closest_gt_face_center_distance'] = float('inf')
-        for face_center in analysis_metrics[f'box_{i}']['kitti_3d_bb_face_centers']:
-
-            distance = np.linalg.norm(face_center - np.array([0, 0, 0]))
-
-            if distance < analysis_metrics[f'box_{i}']['closest_gt_face_center_distance']:
-                analysis_metrics[f'box_{i}']['closest_gt_face_center_distance'] = distance
-                analysis_metrics[f'box_{i}']['kitti_3d_bb_closest_face_center'] = face_center
-                
-        # Calculate face centers for the closest generated box
-        analysis_metrics[f'box_{i}']['closest_box_face_centers'] = None
-        analysis_metrics[f'box_{i}']['closest_box_closest_face_center'] = None
-        analysis_metrics[f'box_{i}']['closest_box_face_center_distance'] = float('inf')
-        analysis_metrics[f'box_{i}']['closest_face_and_gt_distance'] = float('inf')
-        analysis_metrics[f'box_{i}']['IOU_3d'] = 0.0
-        analysis_metrics[f'box_{i}']['IOU_2d'] = 0.0
-        if analysis_metrics[f'box_{i}']['closest_generated_box'] is not None:
-            analysis_metrics[f'box_{i}']['closest_box_face_centers'] = get_bb_centers(analysis_metrics[f'box_{i}']['closest_generated_box'])
-            for face_center in analysis_metrics[f'box_{i}']['closest_box_face_centers']:
-
-                distance = np.linalg.norm(face_center - np.array([0, 0, 0]))
-
-                if distance < analysis_metrics[f'box_{i}']['closest_box_face_center_distance']:
-                    analysis_metrics[f'box_{i}']['closest_box_face_center_distance'] = distance
-                    analysis_metrics[f'box_{i}']['closest_box_closest_face_center'] = face_center
-                    
-            analysis_metrics[f'box_{i}']['closest_face_and_gt_distance'] = np.linalg.norm(analysis_metrics[f'box_{i}']['closest_box_closest_face_center'] - analysis_metrics[f'box_{i}']['kitti_3d_bb_closest_face_center'])
-            
-            # Calculating 3D IOU
-            kitti_gt_corners = np.asarray(kitti_3d_bb.get_box_points())
-            generated_3d_corners = np.asarray(analysis_metrics[f'box_{i}']['closest_generated_box'].get_box_points())
-
-            # Convert to correct order for IoU
-            kitti_gt_corners = np.array([kitti_gt_corners[4], kitti_gt_corners[7], kitti_gt_corners[2], kitti_gt_corners[5], kitti_gt_corners[6], kitti_gt_corners[1], kitti_gt_corners[0], kitti_gt_corners[3]])
-            generated_3d_corners = np.array([generated_3d_corners[4], generated_3d_corners[7], generated_3d_corners[2], generated_3d_corners[5], generated_3d_corners[6], generated_3d_corners[1], generated_3d_corners[0], generated_3d_corners[3]])
-
-            (analysis_metrics[f'box_{i}']['IOU_3d'],analysis_metrics[f'box_{i}']['IOU_2d'])=box3d_iou(generated_3d_corners,kitti_gt_corners)
-
-        # Determine if detection is correct
-        analysis_metrics[f'box_{i}']['correct_detection'] = False
-        if analysis_metrics[f'box_{i}']['closest_face_and_gt_distance'] is not None and analysis_metrics[f'box_{i}']['closest_face_and_gt_distance'] < 2 and analysis_metrics[f'box_{i}']['closest_generated_box_coco_class'] in kitti_coco_class_mapping(analysis_metrics[f'box_{i}']['kitti_bb_class']):
-            analysis_metrics[f'box_{i}']['correct_detection'] = True
-
-        if analysis_metrics[f'box_{i}']['correct_detection']:
-            analysis_metrics['total_correct_detections'] += 1
-        analysis_metrics['total_detections']  += 1
-
-        print(f'{f"KITTI GT 3D BB #{i} class: ":<50} {analysis_metrics[f"box_{i}"]["kitti_bb_class"]}')        
-        print(f'{f"CLOSEST GENERATED 3D BB coco class: ":<50} {analysis_metrics[f"box_{i}"]["closest_generated_box_coco_class"]}')
-        print(f'{f"KITTI GT 3D BB #{i} center: ":<50} {analysis_metrics[f"box_{i}"]["kitti_3d_bb_center"]} m.')
-        print(f'{f"CLOSEST GENERATED 3D BB center: ":<50} {analysis_metrics[f"box_{i}"]["closest_generated_center"]} m.\n')
-        print(f'{"Smallest distance between bb centers: ":<50} {analysis_metrics[f"box_{i}"]["closest_center_distance"]:.4f} m.')
-        print(f'{"Distance between closest face centers:":<50} {analysis_metrics[f"box_{i}"]["closest_face_and_gt_distance"]:.4f} m.')
-        print(f'{"KITTI GT Closest face center: ":<50} {analysis_metrics[f"box_{i}"]["kitti_3d_bb_closest_face_center"]}')
-        print(f'{"GENERATED Closest face center: ":<50} {analysis_metrics[f"box_{i}"]["closest_box_closest_face_center"]}\n')
-        print(f'{"Closest Box 3D IoU: ":<50} {analysis_metrics[f"box_{i}"]["IOU_3d"]:.4f}')
-        print(f'{"Closest Box 2D IoU: ":<50} {analysis_metrics[f"box_{i}"]["IOU_2d"]:.4f}\n')
-        print(f'{"Detection Correct Class and Within +-2m? ":<50} {analysis_metrics[f"box_{i}"]["correct_detection"]}')
-        print('.'*100)
-
-    print(f'{"Total Correct Detections: ":<50} {analysis_metrics["total_correct_detections"]} Correct/{analysis_metrics["total_detections"]} Total\n')
-    print('='*50)
-
-    return analysis_metrics
-
-
-def run_detection(calib, image, pcd, bb_list, labels=None, use_vis = False, use_mask = False, autodrive=True):
+def run_detection(calib, image, pcd, bb_list, labels=None, use_vis = False, use_mask = False, autodrive=True, depth_limit=100):
     """
     Runs 3D object detection 
 
@@ -679,6 +504,12 @@ def run_detection(calib, image, pcd, bb_list, labels=None, use_vis = False, use_
             detection_info.append(detection)
     else:
         detection_info = bb_list
+     
+    #############################################################################
+    # AUTODRIVE DEPTH LIMIT
+    #############################################################################    
+    if autodrive and depth_limit is not None: 
+        pcd, metrics['depth_limit_time'] = time_function(limit_pcd_depth, args=(pcd, depth_limit))
 
     #############################################################################
     # REMOVE GROUND 
@@ -706,232 +537,52 @@ def run_detection(calib, image, pcd, bb_list, labels=None, use_vis = False, use_
     
     metrics['total_time'] += metrics['frustum_segmentation_time']
 
+
     #############################################################################
     # APPLY DBSCAN CLUSTERING TO EACH FRUSTUM 
     #############################################################################
-    object_candidate_clusters = []
     metrics['dbscan_clustering_time'] = 0
 
-    for i, segmented_pcd in enumerate(segmented_pcds):
+    for i, detection in enumerate(detection_info):
         if detection_info[i]['frustum_pcd'] is not None:
             keep_n = 1 if use_mask else 3
-            object_candidate_cluster, execution_time = time_function(apply_dbscan, (segmented_pcd, detection_info[i]), {'keep_n': keep_n, 'visualize': False, 'autodrive': False})
-            object_candidate_clusters.extend(object_candidate_cluster)
-            detection_info[i]['object_candidate_cluster'] = object_candidate_cluster
-
+            object_candidate_cluster, execution_time = time_function(apply_dbscan, (detection_info[i],), {'keep_n': keep_n, 'visualize': False, 'autodrive': autodrive})
             metrics['dbscan_clustering_time'] += execution_time
+            
         else:
             detection_info[i]['object_candidate_cluster'] = None
-    
+                
     metrics['total_time'] += metrics['dbscan_clustering_time']
 
     #############################################################################
     # GENERATE 3D BOUNDING BOXES 
     #############################################################################
-    generated_3d_bb_list, metrics['3d_bounding_box_generation_time'] = time_function(generate_3d_bb, (object_candidate_clusters, detection_info), {'visualize': use_vis})
+    generated_3d_bb_list, metrics['3d_bounding_box_generation_time'] = time_function(generate_3d_bb, (detection_info,), {'visualize': use_vis})
     
     metrics['total_time'] += metrics['3d_bounding_box_generation_time'] 
 
+    if 'depth_limit_time' in metrics.keys():
+        print(f'{"Depth Limit Time":<30}: {metrics["depth_limit_time"]:.>5.4f} s.')
     if 'ground_removal_time' in metrics.keys():
         print(f'{"Ground Removal Time":<30}: {metrics["ground_removal_time"]:.>5.4f} s.')
     print(f'{"3D to 2D Projection Time":<30}: {metrics["3d_to_2d_projection_time"]:.>5.4f} s.')
     print(f'{"Frustum Segmentation Time":<30}: {metrics["frustum_segmentation_time"]:.>5.4f} s.')
     print(f'{"DBSCAN Clustering Time":<30}: {metrics["dbscan_clustering_time"]:.>5.4f} s.')
     print(f'{"Bounding Box Generation Time":<30}: {metrics["3d_bounding_box_generation_time"]:.>5.4f} s.')
-
-    return generated_3d_bb_list, object_candidate_clusters, detection_info, metrics
-
-def prepare_tracking_files(scene_list):
-    scene_dict = {}
-    for scene in scene_list:
-        files = sorted(os.listdir(f'kitti_tracking/training/velodyne/{str(scene).zfill(4)}'))
-        files = [int(os.path.splitext(file)[0]) for file in files]
-        scene_dict[str(scene)] = files
-    return scene_dict
-
-def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False, use_mask = False, autodrive=False):
-    if tracking:
-        scenes = prepare_tracking_files(file_num)
-    else:
-        scenes = {"None": file_num}
-
-    
-    # initialize metrics dict
-    test_metrics = dict()
-    test_metrics['min_scene_time'] = float('inf')
-    test_metrics['avg_scene_time'] = 0
-    test_metrics['max_scene_time'] = -float('inf')
-    test_metrics['total_detections'] = 0
-    test_metrics['min_individual_detection_time'] = float('inf')
-    test_metrics['avg_individual_detection_time'] = 0
-    test_metrics['max_individual_detection_time'] = -float('inf')
-    detection_str = 'maskrcnn' if use_mask else 'bbox'
-
-    for key in sorted(scenes.keys()):
-        if tracking:
-            with open(f'detection/{detection_str}_Pedestrian_train/{str(key).zfill(4)}.txt', "w+", newline="") as f:
-                f.write('')
-            with open(f'detection/{detection_str}_Cyclist_train/{str(key).zfill(4)}.txt', "w+", newline="") as f:
-                f.write('')
-            with open(f'detection/{detection_str}_Car_train/{str(key).zfill(4)}.txt', "w+", newline="") as f:
-                f.write('')
-        for i, file in enumerate(scenes[key]):
-            print('='*50)
-            print(f'Running File {str(file).zfill(6)}')
-            print(f'Starting File {str(file).zfill(6)} Object Detection')
-
-
-            #############################################################################
-            # LOAD KITTI GROUNDTRUTH
-            #############################################################################
-            kitti_gt_image, kitti_gt_pointcloud, kitti_gt_labels, kitti_gt_calib = load_kitti_groundtruth(file, key)
-            
-
-            #############################################################################
-            # LOAD MASK RCNN INFERENCE
-            #############################################################################
-            mr_inf_images, mr_inf_bboxes, mr_inf_segmentations, mr_inf_labels = load_mask_rcnn_inference(file, key)
-            print(f'{"# MASK RCNN DETECTIONS: ":<30}: {len(mr_inf_labels):>5}.')
-            print(f'{"# KITTI GT LABELS: ":<30}: {len(kitti_gt_labels):>5}.\n\n')
-
-            if use_vis:
-                draw_masks(kitti_gt_image, mr_inf_segmentations)
-
-
-            #############################################################################
-            # GET KITTI GROUND TRUTH 3D BOUNDING BOXES
-            #############################################################################
-            kitti_gt_3d_bb = get_groundtruth_3d_bb(kitti_gt_labels, kitti_gt_calib, True, autodrive)
-            
-
-            #############################################################################
-            # GET DETECTOR 2D BB LIST 
-            #############################################################################
-            mr_inf_2d_bb_list = get_detector_2d_bb(mr_inf_bboxes, kitti_gt_image, visualize=use_vis)  
-            
-            
-            #############################################################################
-            # RUN DETECTION
-            #############################################################################
-            labels={'kitti_gt_3d_bb': kitti_gt_3d_bb, 'kitti_gt_labels': kitti_gt_labels}
-            if use_mask:
-                mr_detections = [{'calib': kitti_gt_calib, 'frame': file, 'class': cls, 'bb': bb, 'mask': mask} for cls, bb, mask in zip(mr_inf_labels, mr_inf_2d_bb_list, mr_inf_segmentations)]
-            else:
-                mr_detections = [{'calib': kitti_gt_calib, 'frame': file, 'class': cls, 'bb': bb} for cls, bb in zip(mr_inf_labels, mr_inf_2d_bb_list)]
-            
-            generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(kitti_gt_calib, kitti_gt_image, kitti_gt_pointcloud, mr_detections, labels, use_vis, use_mask, autodrive)
-            
-            
-            #############################################################################
-            # CONVERT TO AB3DMOT FORMAT
-            #############################################################################
-            if tracking:
-                frame_ab3dmot_format = get_ab3dmot_format(detection_info)
-                peds = list(filter(lambda line: line[1] == 1, frame_ab3dmot_format))
-                cyclists = list(filter(lambda line: line[1] == 3, frame_ab3dmot_format))
-                cars = list(filter(lambda line: line[1] == 2, frame_ab3dmot_format))
-
-                with open(f'detection/{detection_str}_Pedestrian_train/{str(key).zfill(4)}.txt', "a", newline="") as f:
-                    writer = csv.writer(f)
-                    writer.writerows(peds)
-                with open(f'detection/{detection_str}_Cyclist_train/{str(key).zfill(4)}.txt', "a", newline="") as f:
-                    writer = csv.writer(f)
-                    writer.writerows(cyclists)
-                with open(f'detection/{detection_str}_Car_train/{str(key).zfill(4)}.txt', "a", newline="") as f:
-                    writer = csv.writer(f)
-                    writer.writerows(cars)
-                            
-
-            #############################################################################
-            # VISUALIZE RESULTS FOR SCENE
-            #############################################################################
-            if use_vis:
-                mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
-                open3d.visualization.draw_geometries(clustered_kitti_gt_pcd_list + kitti_gt_3d_bb + generated_3d_bb_list + [mesh_frame])
-
-            #############################################################################
-            # GET TEST INFERENCE METRICS
-            #############################################################################
-            if detection_metrics['total_time'] > test_metrics['max_scene_time']:
-                test_metrics['max_scene_time'] = detection_metrics['total_time']
-            if detection_metrics['total_time'] < test_metrics['min_scene_time']:
-                test_metrics['min_scene_time'] = detection_metrics['total_time']
-            test_metrics['avg_scene_time'] += detection_metrics['total_time']
-            
-            detection_metrics['avg_time_per_detection'] = 0 if len(mr_inf_labels) == 0 else detection_metrics['total_time']/len(mr_inf_labels)
-            if detection_metrics['avg_time_per_detection'] > test_metrics['max_individual_detection_time']:
-                test_metrics['max_individual_detection_time'] = detection_metrics['avg_time_per_detection']
-            if detection_metrics['avg_time_per_detection'] < test_metrics['min_individual_detection_time']:
-                test_metrics['min_individual_detection_time'] = detection_metrics['avg_time_per_detection']
-            test_metrics['avg_individual_detection_time'] += detection_metrics['avg_time_per_detection']
-            test_metrics['total_detections'] += len(mr_inf_labels)
-
-
-            print(f'\nFile {str(file).zfill(6)} Object Detection {"Total Execution Time":<40}: {detection_metrics["total_time"]:.>5.4f} s.')
-            print(f'File {str(file).zfill(6)} Object Detection {"Avg Inference Time/Detection":<40}: {detection_metrics["avg_time_per_detection"]:.>5.4f} s.')
-            print(f'Finished Running file {str(file).zfill(6)} Object Detection')
-
-            # #############################################################################
-            # # RUN ACCURACY ANALYSIS
-            # #############################################################################
-            # print(f'Starting Running file {str(file).zfill(6)} Detection Analysis')
-            # analysis_metrics = detection_analysis(detection_info, labels)
-            # print(f'Finished Running file {str(file).zfill(6)} Detection Analysis')
-
-            # test_metrics[f'kitti_scene_{str(file).zfill(6)}_analysis_metrics'] = analysis_metrics
-
-            # print('='*50)
         
-    test_metrics["avg_individual_detection_time"] = float(test_metrics["avg_individual_detection_time"])/test_metrics["total_detections"]
-    test_metrics["avg_scene_time"] = float(test_metrics["avg_scene_time"])/len(test_list)
+    return generated_3d_bb_list, detection_info, metrics
 
-    print('='*50)
-    print(f'Overall Detection Inference Analysis')
-    print('='*50)
-    print(f'3D Object Detection {"Min Scene Inference Time":<40}: {test_metrics["min_scene_time"]:.>5.4f} s.')
-    print(f'3D Object Detection {"Avg Scene Inference Time":<40}: {test_metrics["avg_scene_time"]:.>5.4f} s.')
-    print(f'3D Object Detection {"Max Scene Inference Time":<40}: {test_metrics["max_scene_time"]:.>5.4f} s.')
-    print(f'3D Object Detection {"Min Inference Time Per Detection":<40}: {test_metrics["min_individual_detection_time"]:.>5.4f} s.')
-    print(f'3D Object Detection {"Avg Inference Time Per Detection":<40}: {float(test_metrics["avg_individual_detection_time"]):.>5.4f} s.')
-    print(f'3D Object Detection {"Max Inference Time Per Detection":<40}: {test_metrics["max_individual_detection_time"]:.>5.4f} s.')
-    
-    json.dump(test_metrics, open('kitti_test_metrics.json', 'w'), cls=DetectionEncoder)
-        
-def test_autodrive_scenes(file_num = 0, use_vis = False, tracking = False, use_mask = False):
-    
-    # Load project mat
-    intrinsics_path = 'autodrive/intrinsics_zed.mat'
-    extrinsics_path = 'autodrive/tform5.24.mat'
-    
-    calib = dict()
-    calib['ad_transform_mat'], calib['ad_projection_mat'] = load_ad_projection_mats(intrinsics_path, extrinsics_path)
-    
-    # Load AD files
-    image_path = 'autodrive/sensor_data/image/image231.npy'
-    bb_path = 'autodrive/sensor_data/bb/image231_obj.npy'
-    pcd_path = 'autodrive/sensor_data/pcd/pcd231.npy'
-    image, bb_list, pcd = load_ad_files(image_path, bb_path, pcd_path)
-        
-    pcd = np.array(pcd)
-    
-    generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(calib, image, pcd, bb_list, None, use_vis=False, use_mask=False)
-    
-    if use_vis:
-        mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
-        open3d.visualization.draw_geometries(clustered_kitti_gt_pcd_list + generated_3d_bb_list + [mesh_frame])
-    
-    if tracking:
-        frame_ab3dmot_format = get_ab3dmot_format(detection_info)
-        detect_dict = dict()
-        detect_dict['Pedestrian'] = list(filter(lambda line: line[1] == 1, frame_ab3dmot_format))
-        detect_dict['Cyclist'] = list(filter(lambda line: line[1] == 3, frame_ab3dmot_format))
-        detect_dict['Car'] = list(filter(lambda line: line[1] == 2, frame_ab3dmot_format))
+def run_tracking(detection_info, classes, tracker_dict, frame):
+    frame_ab3dmot_format = get_ab3dmot_format(detection_info)
+    detect_dict = dict()
+    detect_dict['Pedestrian'] = list(filter(lambda line: line[1] == 1, frame_ab3dmot_format))
+    detect_dict['Car'] = list(filter(lambda line: line[1] == 2, frame_ab3dmot_format))
+    detect_dict['Animal'] = list(filter(lambda line: line[1] == 3, frame_ab3dmot_format))
 
-        tracker, frame_list = initialize(cfg, trk_root, save_dir, subfolder, seq_name, cat, ID_start, hw, log)
-
-    
-    pass
-    
+    for cat in classes:
+        results = tracker_dict[cat].track(detect_dict[cat], frame, 'live')
+        print(results)
+    frame += 1
         
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

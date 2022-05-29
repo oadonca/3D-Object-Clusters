@@ -14,6 +14,7 @@ from scipy.linalg import solve
 from scipy.spatial.transform import Rotation
 
 
+
 def Rx(theta):
     rx = np.eye(4)
     R = Rotation.from_euler("XYZ",[theta,0,0], degrees=True).as_matrix()
@@ -99,7 +100,6 @@ def pointCloudTOuvxyz(pcd,intrinsics,tform):
     first = time.perf_counter()
     
     pointCloudXYZ = np.array(pcd.points)
-    print('PointCloud XYZ: ', pointCloudXYZ.shape)
 
     #mask_W = pointCloudXYZ[:,1] < 50 
     #pointCloudXYZ = pointCloudXYZ[mask_W,:]
@@ -107,21 +107,13 @@ def pointCloudTOuvxyz(pcd,intrinsics,tform):
     ones = np.ones((pointCloudXYZ.shape[0],1))
 
     pointCloudXYZ_pad_one = np.hstack((pointCloudXYZ,ones))
-    print('PointCloud XYZ pad One: ', pointCloudXYZ_pad_one.shape)
 
-
-    print('tform: \n', tform.T)
     cameraXYZ = np.dot(tform.T,pointCloudXYZ_pad_one.T)
 
-    print('cameraXYZ before delete: ', cameraXYZ.shape)
     cameraXYZ = np.delete(cameraXYZ, 3, 0)
-    print('cameraXYZ after delete: ', cameraXYZ.shape)
 
-    print('intrinsics: \n', intrinsics.T)
     image_UV = np.dot(intrinsics.T,cameraXYZ)
 
-    print('image_uv: ', image_UV.shape)
-    print(image_UV/image_UV[2])
     u = image_UV[0,:]/image_UV[2,:]
     v = image_UV[1,:]/image_UV[2,:]
 
@@ -237,18 +229,18 @@ def convert_xyzTObirdseyeview(store_point):
     return mapping_list
 
 
-path = r'autodrive/tform5.24.mat'
-trans = sio.loadmat(path, squeeze_me=True) 
-tform = trans['tform'].item()[1]
+# path = r'tform5.26 (1).mat'
+# trans = sio.loadmat(path, squeeze_me=True) 
+# tform = trans['tform'].item()[1]
 
 
 
-# tform = np.load("tform_fine_tune.npy")
-#tform = tform.T
+tform = np.load("autodrive/tform_fine_tune (1).npy")
+tform = tform
 
 
 
-path = r'autodrive/intrinsics_zed.mat'
+path = r'autodrive/intrinsics_zed5.26 (1).mat'
 intrinsics = sio.loadmat(path, squeeze_me=True) 
 intrinsics = intrinsics['intrinsics'].item()[6]
 
@@ -260,7 +252,7 @@ img_file_path = r"autodrive/sensor_data/image/image"
 pcd_npy = np.load(pcd_file_path + r"231.npy")
 
 
-downsize = 0.08
+downsize = 0.0005
 
 pcd = o3d.geometry.PointCloud()
 
@@ -268,7 +260,7 @@ pcd.points = o3d.utility.Vector3dVector(pcd_npy)
 
 o3d.visualization.draw_geometries([pcd])
 
-# pcd = pcd.voxel_down_sample(voxel_size = downsize)
+pcd = pcd.voxel_down_sample(voxel_size = downsize)
 
 
 uv,xyz = pointCloudTOuvxyz(pcd,intrinsics,tform)
@@ -548,7 +540,7 @@ while(True):
         #print("save intrin_extrin_Matrix.npy")
 
         tform_save = tform
-        np.save(r"C:\workspace\lidar_camera\tform_fine_tune.npy", tform_save)
+        np.save(r"tform_fine_tune.npy", tform_save)
         print("save tform_fine_tune")
 
     if k == ord('l'):

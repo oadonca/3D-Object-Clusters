@@ -8,7 +8,7 @@ from group5_detection import run_detection
 
 ## Call function
 ```
-generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(calib, image, pcd, bb_list, None, use_vis=False, use_mask=False)
+generated_3d_bb_list, detection_info, detection_metrics = run_detection(calib, image, pcd, bb_list, None, use_vis=False, use_mask=False)
 ```
 
 ##### run_detection inputs
@@ -39,9 +39,8 @@ generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_met
       ['817' '422' '838' '449' 'traffic sign' '0.40283203125']]
 
 ##### run_detection outputs
-- generated_3d_bb_list: List of Open3D Bounding Boxes (Can be AxisAlignedBoundingBox or OrientedBoundingBox)
-- clustered_kitti_gt_pcd_list: List of PointClouds, one PointCloud for each 3D detection
-- detection_info: List of Dictionaries containing comprehensive detection results for each detection in bb_list
+- **generated_3d_bb_list**: List of Open3D Bounding Boxes (Can be AxisAlignedBoundingBox or OrientedBoundingBox)
+- **detection_info**: List of Dictionaries containing comprehensive detection results for each detection in bb_list
   - Each dictionary within the list is of the following format:
     - ```detection_info['bb']: 2D bounding box```
     - ```detection_info['class']: Detection class```
@@ -49,6 +48,9 @@ generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_met
     - ```detection_info['frustum_pcd']: PointCloud as np array, contains all points within the detections frustum```
     - ```detection_info['object_candidate_cluster']: PointCloud as np array, contains all points that belong to the 3D object```
     - ```detection_info['generated_3d_bb']: Open3D 3D bounding box```
+    - ```detection_info['closest_face_center']: The closest face center of the 3D bounding box```
+    - ```detection_info['closest_face_center_distance']: The distance to the closest face center of the 3D bounding box```
+- **detection_metrics**: Dictionary containing inference speed metrics
     
 
 ##### Example of running detection
@@ -73,10 +75,16 @@ image, bb_list, pcd = load_ad_files(image_path, bb_path, pcd_path)
 
 pcd = np.array(pcd)
 
-generated_3d_bb_list, clustered_kitti_gt_pcd_list, detection_info, detection_metrics = run_detection(calib, image, pcd, bb_list, None, use_vis=False, use_mask=False)
-
+start = time.perf_counter()
+generated_3d_bb_list, detection_info, detection_metrics = run_detection(calib, image, pcd, bb_list, None, use_vis=False, use_mask=False)
+print('TOTAL RUN_DETECTION TIME: ', time.perf_counter() - start)
+    
+object_candidate_clusters = [detection['object_candidate_cluster'] for detection in detection_info if detection['object_candidate_cluster'] is not None]
+    
 if True:
     mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
-    open3d.visualization.draw_geometries(clustered_kitti_gt_pcd_list + generated_3d_bb_list + [mesh_frame])
+    open3d.visualization.draw_geometries(object_candidate_clusters + generated_3d_bb_list + [mesh_frame])
+
+pass
 
 ```
