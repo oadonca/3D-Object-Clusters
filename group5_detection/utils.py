@@ -12,6 +12,9 @@ import json
 import pickle
 import re
 import scipy.io as sio
+import os
+
+from iou3d import box3d_iou
 
 class Box3D(object):
     """
