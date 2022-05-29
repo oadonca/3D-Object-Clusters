@@ -874,3 +874,20 @@ def limit_pcd_depth(pcd, depth_limit):
     inds = np.where(((pcd[:,0]**2)+(pcd[:,1]**2)+(pcd[:,2]**2))**.5 < depth_limit)
     return pcd[inds]
 
+def get_autodrive_score_info(detection_info):
+    for i, detection in enumerate(detection_info):
+        score_info_det = dict()
+        
+        # Calculate and return closest face center
+        face_centers = get_bb_centers(detection['generated_3d_bb'])
+        score_info_det['closest_face_center'] = None
+        score_info_det['closest_face_center_distance'] = float('inf')
+        for face_center in face_centers:
+            distance = np.linalg.norm(face_center - np.array([0, 0, 0]))
+            if distance < detection_info['i']['closest_face_center_distance']:
+                score_info_det['closest_face_center_distance'] = distance
+                score_info_det['closest_face_center'] = face_center
+                
+        detection_info[i] = {**detection_info[i], **score_info_det}
+
+        

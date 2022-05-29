@@ -48,6 +48,8 @@ generated_3d_bb_list, detection_info, detection_metrics = run_detection(calib, i
     - ```detection_info['frustum_pcd']: PointCloud as np array, contains all points within the detections frustum```
     - ```detection_info['object_candidate_cluster']: PointCloud as np array, contains all points that belong to the 3D object```
     - ```detection_info['generated_3d_bb']: Open3D 3D bounding box```
+    - ```detection_info['closest_face_center']: The closest face center of the 3D bounding box```
+    - ```detection_info['closest_face_center_distance']: The distance to the closest face center of the 3D bounding box```
 - **detection_metrics**: Dictionary containing inference speed metrics
     
 
