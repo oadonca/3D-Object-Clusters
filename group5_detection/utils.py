@@ -166,7 +166,7 @@ def project_camera_to_lidar(points, proj_mat):
     return points[:3, :]
 
 
-def map_box_to_image(box, proj_mat):
+def map_box_to_image(box, proj_mat, autodrive):
     """
     Projects 3D bounding box into the image plane.
     Args:
@@ -177,7 +177,7 @@ def map_box_to_image(box, proj_mat):
     points_3d = box.in_camera_coordinate()
 
     # project the 3d bounding box into the image plane
-    points_2d = project_to_image(points_3d, proj_mat)
+    points_2d = project_to_image(points_3d, proj_mat, autodrive)
 
     return points_2d
 
@@ -459,12 +459,12 @@ def get_bias_color(base, max_dist=30):
 # =========================================================
 # Mask 3D object detection
 # =========================================================
-def get_groundtruth_3d_bb(objects, calib, oriented = True):
+def get_groundtruth_3d_bb(objects, calib, oriented, autodrive):
     """
     Gets the ground truth bounding boxes provided in objects
     """
     # Projection matrix
-    proj_cam2_2_velo = project_cam2_to_velo(calib)
+    proj_cam2_2_velo = project_cam2_to_velo(calib, autodrive)
 
     bb_list = []
 

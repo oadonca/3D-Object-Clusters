@@ -18,8 +18,10 @@ import csv
 
 from utils import *
 from iou3d import get_3d_box, box3d_iou
+from AB3DMOT.main import main
+from AB3DMOT.AB3DMOT_libs.utils import initialize
 
-def render_image_with_boxes(img, objects, calib):
+def render_image_with_boxes(img, objects, calib, autodrive):
     """
     Show image with 3D boxes
     """
@@ -30,7 +32,7 @@ def render_image_with_boxes(img, objects, calib):
     for obj in objects:
         if obj.type == 'DontCare':
             continue
-        box3d_pixelcoord = map_box_to_image(obj, P_rect2cam2)
+        box3d_pixelcoord = map_box_to_image(obj, P_rect2cam2, autodrive)
         img1 = draw_projected_box3d(img1, box3d_pixelcoord)
 
     plt.imshow(img1)
@@ -39,12 +41,12 @@ def render_image_with_boxes(img, objects, calib):
     plt.show()
 
 
-def render_lidar_with_boxes(pc_velo, objects, calib, img_width, img_height, dbscan=False):
+def render_lidar_with_boxes(pc_velo, objects, calib, img_width, img_height, dbscan=False, autodrive=True):
     # projection matrix (project from velo2cam2)
     proj_velo2cam2 = project_velo_to_cam2(calib)
 
     # apply projection
-    pts_2d = project_to_image(pc_velo.transpose(), proj_velo2cam2)
+    pts_2d = project_to_image(pc_velo.transpose(), proj_velo2cam2, autodrive)
 
     # Filter lidar points to be within image FOV
     inds = np.where((pts_2d[0, :] < img_width) & (pts_2d[0, :] >= 0) &
@@ -444,7 +446,7 @@ def get_cluster_scores(cluster_list, detection, weights = [1.0, 1.0, 1.0, 1.0], 
         cluster_points = np.array(cluster.points)
         
         # apply projection
-        pts_2d = project_to_image(cluster_points.transpose(), proj_velo2cam2)
+        pts_2d = project_to_image(cluster_points.transpose(), proj_velo2cam2, use_autodrive_classes)
 
         # Filter out pixels points
         imgfov_pc_pixel = pts_2d
@@ -521,7 +523,7 @@ def apply_dbscan(pointcloud, detection, keep_n=5, visualize=True, autodrive=True
             pcd_list.append(pcd.select_down_sample(np.argwhere(labels==label))) # select_by_index() instead
 
     if len(pcd_list) > 1:
-        cluster_losses = get_cluster_scores(pcd_list, detection)
+        cluster_losses = get_cluster_scores(pcd_list, detection, use_autodrive_classes=autodrive)
         object_candidate_cluster_idx = np.argmin(cluster_losses)
         pcd_list = [pcd_list[object_candidate_cluster_idx]]
         
@@ -713,7 +715,7 @@ def run_detection(calib, image, pcd, bb_list, labels=None, use_vis = False, use_
     for i, segmented_pcd in enumerate(segmented_pcds):
         if detection_info[i]['frustum_pcd'] is not None:
             keep_n = 1 if use_mask else 3
-            object_candidate_cluster, execution_time = time_function(apply_dbscan, (segmented_pcd, detection_info[i]), {'keep_n': keep_n, 'visualize': False})
+            object_candidate_cluster, execution_time = time_function(apply_dbscan, (segmented_pcd, detection_info[i]), {'keep_n': keep_n, 'visualize': False, 'autodrive': False})
             object_candidate_clusters.extend(object_candidate_cluster)
             detection_info[i]['object_candidate_cluster'] = object_candidate_cluster
 
@@ -799,7 +801,7 @@ def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False, use_mask 
             #############################################################################
             # GET KITTI GROUND TRUTH 3D BOUNDING BOXES
             #############################################################################
-            kitti_gt_3d_bb = get_groundtruth_3d_bb(kitti_gt_labels, kitti_gt_calib, True)
+            kitti_gt_3d_bb = get_groundtruth_3d_bb(kitti_gt_labels, kitti_gt_calib, True, autodrive)
             
 
             #############################################################################
@@ -918,6 +920,16 @@ def test_autodrive_scenes(file_num = 0, use_vis = False, tracking = False, use_m
         mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
         open3d.visualization.draw_geometries(clustered_kitti_gt_pcd_list + generated_3d_bb_list + [mesh_frame])
     
+    if tracking:
+        frame_ab3dmot_format = get_ab3dmot_format(detection_info)
+        detect_dict = dict()
+        detect_dict['Pedestrian'] = list(filter(lambda line: line[1] == 1, frame_ab3dmot_format))
+        detect_dict['Cyclist'] = list(filter(lambda line: line[1] == 3, frame_ab3dmot_format))
+        detect_dict['Car'] = list(filter(lambda line: line[1] == 2, frame_ab3dmot_format))
+
+        tracker, frame_list = initialize(cfg, trk_root, save_dir, subfolder, seq_name, cat, ID_start, hw, log)
+
+    
     pass
     
         
@@ -950,5 +962,5 @@ if __name__ == '__main__':
         19,
         20
     ]
-    # test_kitti_scenes(test_list, arguments.vis, arguments.tracking, arguments.use_mask, autodrive=False)
-    test_autodrive_scenes(0, True)
+    test_kitti_scenes(test_list, arguments.vis, arguments.tracking, arguments.use_mask, autodrive=False)
+    # test_autodrive_scenes(0, arguments.use_mask)
