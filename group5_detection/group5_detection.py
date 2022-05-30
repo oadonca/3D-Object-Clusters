@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+from AB3DMOT.AB3DMOT_libs.io import get_frame_det
 import open3d
 import collections
 import argparse
@@ -572,8 +573,8 @@ def run_detection(calib, image, pcd, bb_list, labels=None, use_vis = False, use_
         
     return generated_3d_bb_list, detection_info, metrics
 
-def run_tracking(detection_info, classes, tracker_dict, frame):
-    frame_ab3dmot_format = get_ab3dmot_format(detection_info)
+def run_tracking(detection_info, classes, tracker_dict, frame, autodrive=False):
+    frame_ab3dmot_format = get_ab3dmot_format(detection_info, autodrive=autodrive)
     detect_dict = dict()
     detect_dict['Pedestrian'] = list(filter(lambda line: line[1] == 1, frame_ab3dmot_format))
     detect_dict['Car'] = list(filter(lambda line: line[1] == 2, frame_ab3dmot_format))
@@ -581,7 +582,11 @@ def run_tracking(detection_info, classes, tracker_dict, frame):
 
     results_dict = dict()
     for cat in classes:
-        results_dict[cat] = tracker_dict[cat].track(detect_dict[cat], frame, 'live')
+        if len(detect_dict[cat]) > 0:
+            detect_arr = get_frame_det(np.asarray(detect_dict[cat], dtype=float), frame)
+            results_dict[cat] = tracker_dict[cat].track(detect_arr, frame, 'live')[0]
+        else:
+            results_dict[cat] = []
         print(results_dict[cat])
     return results_dict
         

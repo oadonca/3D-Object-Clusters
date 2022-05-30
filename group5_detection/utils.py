@@ -264,10 +264,22 @@ def kitti_coco_class_mapping(cls, transform=0):
     return kitti_to_coco[cls]
 
 
-def get_coco_class(class_idx):
-    classes = get_coco_classes()
-    print(class_idx)
-    return classes[class_idx]
+def class_2_type(class_idx, autodrive):
+    if autodrive:
+        if class_idx in ['car', 'bus', 'truck', 'train']:
+            return 2
+        elif class_idx in ['animal']:
+            return 3
+        elif class_idx in ['person']:
+            return 1
+    else:
+        classes = get_coco_classes()
+        if classes[class_idx] in ['car', 'bus', 'truck', 'train']:
+            return 2
+        elif classes[class_idx] in ['bicycle']:
+            return 3
+        elif classes[class_idx] in ['person']:
+            return 1
 
 
 def remove_extra_coco_detections(bbox, segmentation, label):
@@ -629,7 +641,7 @@ def detection_analysis(detections, labels):
         for j, detection in enumerate(detections):
 
             if 'generated_3d_bb' in detection.keys() and detection['generated_3d_bb'] is not None:
-                detection_coco_class = get_coco_class(detection['class'])
+                detection_coco_class = class_2_type(detection['class'])
                 generated_3d_bb_center = detection['generated_3d_bb'].get_center()
                 distance = np.linalg.norm(analysis_metrics[f'box_{i}']['kitti_3d_bb_center'] - generated_3d_bb_center)
 
@@ -725,7 +737,7 @@ def get_cluster_scores(cluster_list, detection, weights = [1.0, 1.0, 1.0, 1.0], 
         # Average height
         ############################################################
         avg_height = [1.64592, .856, 2, 4.1148, 2, 4.1148, 4.572, 1.27, 1.8, 1.4, 1, 4]
-        class_idx = obj_list.index(get_coco_class(detection['class']))
+        class_idx = obj_list.index(class_2_type(detection['class']))
         
         cluster_3d_bb = cluster.get_axis_aligned_bounding_box()
         cluster_height = cluster_3d_bb.get_half_extent()[2]
@@ -787,7 +799,7 @@ def get_cluster_scores(cluster_list, detection, weights = [1.0, 1.0, 1.0, 1.0], 
     return cluster_losses
 
 
-def get_ab3dmot_format(detection_info, frame=0):
+def get_ab3dmot_format(detection_info, autodrive=False, frame=0):
     # detection keys: class, bb, mask, frustum_pcd, object_candidate_cluster, generated_3d_bb
     frame_input = list()
     for i, detection in enumerate(detection_info):
@@ -797,12 +809,7 @@ def get_ab3dmot_format(detection_info, frame=0):
             detection_input['frame'] = frame if 'frame' not in detection else detection['frame']
             
             # Detection type/class
-            if get_coco_class(detection['class']) in ['car', 'bus', 'truck', 'train']:
-                detection_input['type'] = 2
-            elif get_coco_class(detection['class']) in ['bicycle']:
-                detection_input['type'] = 3
-            elif get_coco_class(detection['class']) in ['person']:
-                detection_input['type'] = 1
+            detection_input['type'] = class_2_type(detection['class'], autodrive)
                 
             # 2D bounding box top left and bottom right coordinates
             detection_input['2d_bb'] = [detection['bb'][0][0], detection['bb'][0][1], detection['bb'][3][0], detection['bb'][3][1]]
