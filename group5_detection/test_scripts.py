@@ -181,19 +181,25 @@ def test_autodrive_scenes(file_num = 0, use_vis = False, tracking = False, use_m
         
     object_candidate_clusters = [detection['object_candidate_cluster'] for detection in detection_info if detection['object_candidate_cluster'] is not None]
         
-    if True:
+    if False:
         mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
         open3d.visualization.draw_geometries(object_candidate_clusters + generated_3d_bb_list + [mesh_frame])
 
-    cfg = Config('./configs/cepton.yml')
-    classes = cfg.cat_list
-    # Trackers must only be initialized once per class, move to global scope if function will be called multiple times
-    tracker_dict = dict()
-    ID_start = 1
-    for label in classes:
-        tracker_dict[label] = AB3DMOT(cfg, label, calib=None, oxts=None, img_dir=None, vis_dir=None, hw=None, log=None, ID_init=ID_start)
-        ID_start += 1000
-    frame = 0
+    if True:
+        frame = 0
+        cfg = Config('./AB3DMOT/configs/cepton.yml')[0]
+        classes = cfg.cat_list
+        time_str = time.time()
+        log = 'log/log_%s.txt' % time_str
+        log = open(log, 'w')
 
-    run_tracking(detection_info, classes, tracker_dict, frame)
+        # Trackers must only be initialized once per class, move to global scope if function will be called multiple times
+        tracker_dict = dict()
+        ID_start = 1
+        for label in classes:
+            tracker_dict[label] = AB3DMOT(cfg, label, calib=None, oxts=None, img_dir=None, vis_dir=None, hw=None, log=log, ID_init=ID_start)
+            ID_start += 1000
+
+        trk_results_dict = run_tracking(detection_info, classes, tracker_dict, frame)
+        frame += 1
     pass

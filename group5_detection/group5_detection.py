@@ -384,20 +384,20 @@ def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=False, au
     average_inlier = np.mean(pointcloud[inliers], axis=0)
 
     # Remove inliers
-    segmented_pointcloud = pcd.select_by_index(inliers, invert=True)
+    segmented_pointcloud = pcd.select_down_sample(inliers, invert=True)
     segmented_pointcloud_points = np.array(segmented_pointcloud.points)
     
     distance_to_plane = lambda x,y,z: (model[0]*x + model[1]*y + model[2]*z + model[3])/np.sqrt(np.sum(np.square(model[:3])))
     # Remove points below plane
     mask_inds = np.where(distance_to_plane(segmented_pointcloud_points[:, 0], segmented_pointcloud_points[:, 1], segmented_pointcloud_points[:, 2]) < removal_offset)
-    segmented_pointcloud = segmented_pointcloud.select_by_index(mask_inds[0], invert=True)
+    segmented_pointcloud = segmented_pointcloud.select_down_sample(mask_inds[0], invert=True)
     segmented_pointcloud_points = np.array(segmented_pointcloud.points)
     
     if visualize:
         # Visualize
         inlier_cloud = pcd.select_down_sample(inliers) # use select_by_index() depending on version of open3d
         inlier_cloud.paint_uniform_color([1.0, 0, 0])
-        outlier_cloud = pcd.select_by_index(inliers, invert=True) # same as above
+        outlier_cloud = pcd.select_down_sample(inliers, invert=True) # same as above
         outlier_cloud.paint_uniform_color([0, 1.0, 0.0])
         open3d.visualization.draw_geometries([inlier_cloud + outlier_cloud] + labels,
                                     zoom=0.8,
@@ -579,10 +579,11 @@ def run_tracking(detection_info, classes, tracker_dict, frame):
     detect_dict['Car'] = list(filter(lambda line: line[1] == 2, frame_ab3dmot_format))
     detect_dict['Animal'] = list(filter(lambda line: line[1] == 3, frame_ab3dmot_format))
 
+    results_dict = dict()
     for cat in classes:
-        results = tracker_dict[cat].track(detect_dict[cat], frame, 'live')
-        print(results)
-    frame += 1
+        results_dict[cat] = tracker_dict[cat].track(detect_dict[cat], frame, 'live')
+        print(results_dict[cat])
+    return results_dict
         
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -613,5 +614,5 @@ if __name__ == '__main__':
         19,
         20
     ]
-    test_kitti_scenes(test_list, arguments.vis, arguments.tracking, arguments.use_mask, autodrive=False)
-    # test_autodrive_scenes(0, arguments.use_mask)
+    # test_kitti_scenes(test_list, arguments.vis, arguments.tracking, arguments.use_mask, autodrive=False)
+    test_autodrive_scenes(0, arguments.use_mask)

@@ -266,6 +266,7 @@ def kitti_coco_class_mapping(cls, transform=0):
 
 def get_coco_class(class_idx):
     classes = get_coco_classes()
+    print(class_idx)
     return classes[class_idx]
 
 
@@ -786,14 +787,14 @@ def get_cluster_scores(cluster_list, detection, weights = [1.0, 1.0, 1.0, 1.0], 
     return cluster_losses
 
 
-def get_ab3dmot_format(detection_info):
+def get_ab3dmot_format(detection_info, frame=0):
     # detection keys: class, bb, mask, frustum_pcd, object_candidate_cluster, generated_3d_bb
     frame_input = list()
     for i, detection in enumerate(detection_info):
         if 'generated_3d_bb' in detection.keys() and detection['generated_3d_bb'] is not None:
             detection_input = dict()
             # Frame number
-            detection_input['frame'] = detection['frame']
+            detection_input['frame'] = frame if 'frame' not in detection else detection['frame']
             
             # Detection type/class
             if get_coco_class(detection['class']) in ['car', 'bus', 'truck', 'train']:
