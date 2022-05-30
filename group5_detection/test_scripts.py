@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import open3d
 import json
 import csv
+from matplotlib import patches
 
 from utils import *
 from group5_detection import run_detection
@@ -157,7 +158,6 @@ def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False, use_mask 
 
 
 def test_autodrive_scenes(file_num = 0, use_vis = False, tracking = False, use_mask = False):
-    
     # Load project mat
     intrinsics_path = 'autodrive/intrinsics_zed.mat'
     extrinsics_path = 'autodrive/tform5.24.mat'
@@ -165,22 +165,51 @@ def test_autodrive_scenes(file_num = 0, use_vis = False, tracking = False, use_m
     calib = dict()
     calib['ad_transform_mat'], calib['ad_projection_mat'] = load_ad_projection_mats(intrinsics_path, extrinsics_path)
 
-    # Load AD files
-    image_path = 'autodrive/sensor_data/image/image231.npy'
-    bb_path = 'autodrive/sensor_data/bb/image231_obj.npy'
-    pcd_path = 'autodrive/sensor_data/pcd/pcd231.npy'
-    image, bb_list, pcd = load_ad_files(image_path, bb_path, pcd_path)
+    vis = open3d.visualization.Visualizer()
+    vis.create_window()
 
-    pcd = np.array(pcd)
+    geom_added = False
+    
 
-    start = time.perf_counter()
-    generated_3d_bb_list, detection_info, detection_metrics = run_detection(calib, image, pcd, bb_list, None, use_vis=False, use_mask=False)
-    print('TOTAL RUN_DETECTION TIME: ', time.perf_counter() - start)
+    for file_num in range(200,401):        
+        # Load AD files
+        image_path = f'autodrive/sensor_data/image/image{file_num}.npy'
+        bb_path = f'autodrive/sensor_data/bb/{file_num}_obj_list.npy'
+        pcd_path = f'autodrive/sensor_data/pcd/pcd{file_num}.npy'
+        image, bb_list, pcd = load_ad_files(image_path, bb_path, pcd_path)
+
+        # fig, ax = plt.subplots(1, 1, figsize=(5, 5))
+        # ax.imshow(image)
+        # for bb in bb_list:
+        #     ax.add_patch(patches.Rectangle((int(bb[0]), int(bb[1])), int(bb[2])-int(bb[0]), int(bb[3])-int(bb[1]), fill=False))
+        # plt.show()
+
+        pcd = np.array(pcd)
+
+        start = time.perf_counter()
+        generated_3d_bb_list, detection_info, detection_metrics = run_detection(calib, image, pcd, bb_list, None, use_vis=False, use_mask=False)
+        print('TOTAL RUN_DETECTION TIME: ', time.perf_counter() - start)
         
-    object_candidate_clusters = [detection['object_candidate_cluster'] for detection in detection_info if detection['object_candidate_cluster'] is not None]
-        
-    if True:
-        mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
-        open3d.visualization.draw_geometries(object_candidate_clusters + generated_3d_bb_list + [mesh_frame])
+        object_candidate_clusters = [detection['object_candidate_cluster'] for detection in detection_info if detection['object_candidate_cluster'] is not None]
+            
+        vis.clear_geometries()
+        # ctr.camera_local_translate(-1, -1, 0)
+        for obj_cluster, bb_3d in zip(object_candidate_clusters, generated_3d_bb_list):
+            if not geom_added:
+                vis.add_geometry(obj_cluster)
+                vis.add_geometry(bb_3d)
+            else:
+                vis.update_geoemtry(obj_cluster)
+                vis.update_geometry(bb_3d)
+
+        time.sleep(.1)                
+        vis.poll_events()
+        vis.update_renderer()
+
+        if False:
+            mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
+            open3d.visualization.draw_geometries(object_candidate_clusters + generated_3d_bb_list + [mesh_frame])
+
+    vis.destroy_window()
 
     pass

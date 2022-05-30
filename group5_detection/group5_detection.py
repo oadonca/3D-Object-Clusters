@@ -556,7 +556,7 @@ def run_detection(calib, image, pcd, bb_list, labels=None, use_vis = False, use_
     #############################################################################
     # GENERATE 3D BOUNDING BOXES 
     #############################################################################
-    generated_3d_bb_list, metrics['3d_bounding_box_generation_time'] = time_function(generate_3d_bb, (detection_info,), {'visualize': use_vis})
+    generated_3d_bb_list, metrics['3d_bounding_box_generation_time'] = time_function(generate_3d_bb, (detection_info,), {'oriented': True, 'visualize': use_vis})
     
     metrics['total_time'] += metrics['3d_bounding_box_generation_time'] 
 
