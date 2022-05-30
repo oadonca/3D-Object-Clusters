@@ -1,11 +1,13 @@
 import matplotlib.pyplot as plt
+from AB3DMOT.AB3DMOT_libs.model import AB3DMOT
+from AB3DMOT.AB3DMOT_libs.utils import Config
 import open3d
 import json
 import csv
 from matplotlib import patches
 
 from utils import *
-from group5_detection import run_detection
+from group5_detection import run_detection, run_tracking
 
 def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False, use_mask = False, autodrive=False):
     if tracking:
@@ -83,7 +85,7 @@ def test_kitti_scenes(file_num = 0, use_vis = False, tracking = False, use_mask 
             # CONVERT TO AB3DMOT FORMAT
             #############################################################################
             if tracking:
-                frame_ab3dmot_format = get_ab3dmot_format(detection_info)
+                frame_ab3dmot_format = get_ab3dmot_format(detection_info, autodrive=autodrive)
                 peds = list(filter(lambda line: line[1] == 1, frame_ab3dmot_format))
                 cyclists = list(filter(lambda line: line[1] == 3, frame_ab3dmot_format))
                 cars = list(filter(lambda line: line[1] == 2, frame_ab3dmot_format))
@@ -212,4 +214,21 @@ def test_autodrive_scenes(file_num = 0, use_vis = False, tracking = False, use_m
 
     vis.destroy_window()
 
+    if True:
+        frame = 0
+        cfg = Config('./AB3DMOT/configs/cepton.yml')[0]
+        classes = cfg.cat_list
+        time_str = time.time()
+        log = 'log/log_%s.txt' % time_str
+        log = open(log, 'w')
+
+        # Trackers must only be initialized once per class, move to global scope if function will be called multiple times
+        tracker_dict = dict()
+        ID_start = 1
+        for label in classes:
+            tracker_dict[label] = AB3DMOT(cfg, label, calib=None, oxts=None, img_dir=None, vis_dir=None, hw=None, log=log, ID_init=ID_start)
+            ID_start += 1000
+
+        trk_results_dict = run_tracking(detection_info, classes, tracker_dict, frame, True)
+        frame += 1
     pass

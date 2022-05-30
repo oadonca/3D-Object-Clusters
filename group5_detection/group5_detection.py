@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+from AB3DMOT.AB3DMOT_libs.io import get_frame_det
 import open3d
 import collections
 import argparse
@@ -6,9 +7,10 @@ import numpy as np
 import math
 
 from utils import *
+from iou3d import get_3d_box, box3d_iou
 from test_scripts import *
 
-def render_image_with_boxes(img, objects, calib):
+def render_image_with_boxes(img, objects, calib, autodrive):
     """
     Show image with 3D boxes
     """
@@ -19,7 +21,7 @@ def render_image_with_boxes(img, objects, calib):
     for obj in objects:
         if obj.type == 'DontCare':
             continue
-        box3d_pixelcoord = map_box_to_image(obj, P_rect2cam2)
+        box3d_pixelcoord = map_box_to_image(obj, P_rect2cam2, autodrive)
         img1 = draw_projected_box3d(img1, box3d_pixelcoord)
 
     plt.imshow(img1)
@@ -28,12 +30,12 @@ def render_image_with_boxes(img, objects, calib):
     plt.show()
 
 
-def render_lidar_with_boxes(pc_velo, objects, calib, img_width, img_height, dbscan=False):
+def render_lidar_with_boxes(pc_velo, objects, calib, img_width, img_height, dbscan=False, autodrive=True):
     # projection matrix (project from velo2cam2)
     proj_velo2cam2 = project_velo_to_cam2(calib)
 
     # apply projection
-    pts_2d = project_to_image(pc_velo.transpose(), proj_velo2cam2)
+    pts_2d = project_to_image(pc_velo.transpose(), proj_velo2cam2, autodrive)
 
     # Filter lidar points to be within image FOV
     inds = np.where((pts_2d[0, :] < img_width) & (pts_2d[0, :] >= 0) &
@@ -383,20 +385,20 @@ def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=False, au
     average_inlier = np.mean(pointcloud[inliers], axis=0)
 
     # Remove inliers
-    segmented_pointcloud = pcd.select_by_index(inliers, invert=True)
+    segmented_pointcloud = pcd.select_down_sample(inliers, invert=True)
     segmented_pointcloud_points = np.array(segmented_pointcloud.points)
     
     distance_to_plane = lambda x,y,z: (model[0]*x + model[1]*y + model[2]*z + model[3])/np.sqrt(np.sum(np.square(model[:3])))
     # Remove points below plane
     mask_inds = np.where(distance_to_plane(segmented_pointcloud_points[:, 0], segmented_pointcloud_points[:, 1], segmented_pointcloud_points[:, 2]) < removal_offset)
-    segmented_pointcloud = segmented_pointcloud.select_by_index(mask_inds[0], invert=True)
+    segmented_pointcloud = segmented_pointcloud.select_down_sample(mask_inds[0], invert=True)
     segmented_pointcloud_points = np.array(segmented_pointcloud.points)
     
     if visualize:
         # Visualize
-        inlier_cloud = pcd.select_by_index(inliers) # use select_by_index() depending on version of open3d
+        inlier_cloud = pcd.select_down_sample(inliers) # use select_by_index() depending on version of open3d
         inlier_cloud.paint_uniform_color([1.0, 0, 0])
-        outlier_cloud = pcd.select_by_index(inliers, invert=True) # same as above
+        outlier_cloud = pcd.select_down_sample(inliers, invert=True) # same as above
         outlier_cloud.paint_uniform_color([0, 1.0, 0.0])
         open3d.visualization.draw_geometries([inlier_cloud + outlier_cloud] + labels,
                                     zoom=0.8,
@@ -441,10 +443,10 @@ def apply_dbscan(detection, keep_n=5, visualize=True, autodrive=True):
     pcd_list = []
     for label, count in counts.most_common(keep_n):
         if not label < 0:
-            pcd_list.append(pcd.select_by_index(np.argwhere(labels==label))) # select_by_index() instead
+            pcd_list.append(pcd.select_down_sample(np.argwhere(labels==label))) # select_by_index() instead
 
     if len(pcd_list) > 1:
-        cluster_losses = get_cluster_scores(pcd_list, detection)
+        cluster_losses = get_cluster_scores(pcd_list, detection, use_autodrive_classes=autodrive)
         object_candidate_cluster_idx = np.argmin(cluster_losses)
         pcd_list = [pcd_list[object_candidate_cluster_idx]]
         
@@ -568,9 +570,25 @@ def run_detection(calib, image, pcd, bb_list, labels=None, use_vis = False, use_
     print(f'{"Frustum Segmentation Time":<30}: {metrics["frustum_segmentation_time"]:.>5.4f} s.')
     print(f'{"DBSCAN Clustering Time":<30}: {metrics["dbscan_clustering_time"]:.>5.4f} s.')
     print(f'{"Bounding Box Generation Time":<30}: {metrics["3d_bounding_box_generation_time"]:.>5.4f} s.')
-
+        
     return generated_3d_bb_list, detection_info, metrics
 
+def run_tracking(detection_info, classes, tracker_dict, frame, autodrive=False):
+    frame_ab3dmot_format = get_ab3dmot_format(detection_info, autodrive=autodrive)
+    detect_dict = dict()
+    detect_dict['Pedestrian'] = list(filter(lambda line: line[1] == 1, frame_ab3dmot_format))
+    detect_dict['Car'] = list(filter(lambda line: line[1] == 2, frame_ab3dmot_format))
+    detect_dict['Animal'] = list(filter(lambda line: line[1] == 3, frame_ab3dmot_format))
+
+    results_dict = dict()
+    for cat in classes:
+        if len(detect_dict[cat]) > 0:
+            detect_arr = get_frame_det(np.asarray(detect_dict[cat], dtype=float), frame)
+            results_dict[cat] = tracker_dict[cat].track(detect_arr, frame, 'live')[0]
+        else:
+            results_dict[cat] = []
+        print(results_dict[cat])
+    return results_dict
         
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -602,4 +620,4 @@ if __name__ == '__main__':
         20
     ]
     # test_kitti_scenes(test_list, arguments.vis, arguments.tracking, arguments.use_mask, autodrive=False)
-    test_autodrive_scenes(0, True)
+    test_autodrive_scenes(0, arguments.use_mask)
