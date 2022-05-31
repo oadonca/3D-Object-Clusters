@@ -2,7 +2,6 @@
 ./group5_detection/kitti_groundtruth
 *.npy
 kitti_tracking
-detection
 AB3DMOT
 mask_rcnn_inference
 *.png

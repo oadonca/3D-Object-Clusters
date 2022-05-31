@@ -812,7 +812,7 @@ def get_ab3dmot_format(detection_info, autodrive=False, frame=0):
             detection_input['type'] = class_2_type(detection['class'], autodrive)
                 
             # 2D bounding box top left and bottom right coordinates
-            detection_input['2d_bb'] = [detection['bb'][0][0], detection['bb'][0][1], detection['bb'][3][0], detection['bb'][3][1]]
+            detection_input['2d_bb'] = [detection['bb'][0], detection['bb'][1], detection['bb'][2], detection['bb'][3]]
             
             # Detection confidence
             detection_input['score'] = .5
