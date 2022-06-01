@@ -580,15 +580,14 @@ def run_tracking(detection_info, classes, tracker_dict, frame, autodrive=False):
     detect_dict['Car'] = list(filter(lambda line: line[1] == 2, frame_ab3dmot_format))
     detect_dict['Animal'] = list(filter(lambda line: line[1] == 3, frame_ab3dmot_format))
 
-    results_dict = dict()
+    results = []
     for cat in classes:
         if len(detect_dict[cat]) > 0:
-            detect_arr = get_frame_det(np.asarray(detect_dict[cat], dtype=float), frame)
-            results_dict[cat] = tracker_dict[cat].track(detect_arr, frame, 'live')[0][0]
-            print(results_dict[cat])
-        else:
-            results_dict[cat] = []
-    return results_dict
+            detect_arr = get_frame_det(np.concatenate([detect_dict[cat]]), frame)
+            tracks = tracker_dict[cat].track(detect_arr, frame, 'live')[0][0]
+            if len(tracks) > 0:
+                results.append(tracks[0])
+    return results
         
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

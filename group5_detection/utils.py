@@ -817,6 +817,10 @@ def get_ab3dmot_format(detection_info, autodrive=False, frame=0):
             # Detection confidence
             detection_input['score'] = .5
 
+            # save these for remapping later
+            detection_input['orig_label'] = detection['class']
+            detection_input['generated_3d_bb'] = detection['generated_3d_bb']
+
             # 3D bounding box: height, width, length, x, y, z, rot_y
             bb_3d = detection['generated_3d_bb']
             if not isinstance(bb_3d, open3d.geometry.AxisAlignedBoundingBox):
@@ -848,6 +852,20 @@ def get_ab3dmot_format(detection_info, autodrive=False, frame=0):
         
     return frame_input
 
+def get_det_format(tracked_dets):
+    dets = []
+    for tracked_det in tracked_dets:
+        dets.append({
+            'tracking_3d_bb': tracked_det[0:7],
+            'trk_id': tracked_det[7],
+            'alpha': tracked_det[8],
+            'bb': tracked_det[10:14],
+            'score': tracked_det[14],
+            'class': tracked_det[15],
+            'generated_3d_bb': tracked_det[16],
+            'velocity': tracked_det[17:20]
+        })
+    return dets
 
 def load_ad_projection_mats(intrinsics_path, extrinsics_path):
     intrinsics_mat = sio.loadmat(intrinsics_path, squeeze_me=True)['intrinsics'].item()[6]
