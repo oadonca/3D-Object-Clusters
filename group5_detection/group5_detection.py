@@ -575,15 +575,12 @@ def run_detection(calib, image, pcd, bb_list, labels=None, use_vis = False, use_
 
 def run_tracking(detection_info, classes, tracker_dict, frame, autodrive=False):
     frame_ab3dmot_format = get_ab3dmot_format(detection_info, autodrive=autodrive, frame=frame)
-    detect_dict = dict()
-    detect_dict['Pedestrian'] = list(filter(lambda line: line[1] == 1, frame_ab3dmot_format))
-    detect_dict['Car'] = list(filter(lambda line: line[1] == 2, frame_ab3dmot_format))
-    detect_dict['Animal'] = list(filter(lambda line: line[1] == 3, frame_ab3dmot_format))
 
     results = []
-    for cat in classes:
-        if len(detect_dict[cat]) > 0:
-            detect_arr = get_frame_det(np.concatenate([detect_dict[cat]]), frame)
+    for label_num, cat in enumerate(classes):
+        class_dets = list(filter(lambda line: line[1] == label_num + 1, frame_ab3dmot_format))
+        if len(class_dets) > 0:
+            detect_arr = get_frame_det(np.concatenate(class_dets), frame)
             tracks = tracker_dict[cat].track(detect_arr, frame, 'live')[0][0]
             if len(tracks) > 0:
                 results.append(tracks[0])
