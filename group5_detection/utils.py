@@ -820,6 +820,11 @@ def get_ab3dmot_format(detection_info, autodrive=False, frame=0):
             # save these for remapping later
             detection_input['orig_label'] = detection['class']
             detection_input['generated_3d_bb'] = detection['generated_3d_bb']
+            detection_input['confidence'] = detection_info['confidence']
+            detection_input['frustum_pcd'] = detection_info['frustum_pcd']
+            detection_input['object_candidate_cluster'] = detection_info['object_candidate_cluster']
+            detection_input['closest_face_center'] = detection_info['closest_face_center']
+            detection_input['closest_face_center_distance'] = detection_info['closest_face_center_distance']
 
             # 3D bounding box: height, width, length, x, y, z, rot_y
             bb_3d = detection['generated_3d_bb']
@@ -862,8 +867,13 @@ def get_det_format(tracked_dets):
             'bb': tracked_det[10:14],
             'score': tracked_det[14],
             'class': tracked_det[15],
-            'generated_3d_bb': tracked_det[16],
-            'velocity': tracked_det[17:20]
+            'confidence': tracked_det[16],
+            'frustum_pcd': tracked_det[17],
+            'object_candidate_cluster': tracked_det[18],
+            'closest_face_center': tracked_det[19],
+            'closest_face_center_distance': tracked_det[20],
+            'generated_3d_bb': tracked_det[21],
+            'velocity': tracked_det[22:25]
         })
     return dets
 

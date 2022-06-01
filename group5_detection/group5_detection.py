@@ -584,6 +584,7 @@ def run_tracking(detection_info, classes, tracker_dict, frame, autodrive=False):
             tracks = tracker_dict[cat].track(detect_arr, frame, 'live')[0][0]
             if len(tracks) > 0:
                 results.append(tracks[0])
+    results = get_det_format(results)
     return results
         
 if __name__ == '__main__':

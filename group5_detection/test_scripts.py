@@ -227,7 +227,7 @@ def test_autodrive_scenes(file_num = 0, use_vis = False, tracking = False, use_m
 
         # Trackers must only be initialized once per class, move to global scope if function will be called multiple times
         tracks = run_tracking(detection_info, classes, tracker_dict, frame, True)
-        results = results + get_det_format(tracks)
+        results = results + tracks
 
         frame+=1
     return results
