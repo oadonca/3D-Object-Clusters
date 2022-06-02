@@ -1,5 +1,5 @@
 import matplotlib.pyplot as plt
-# from AB3DMOT.AB3DMOT_libs.io import get_frame_det
+from AB3DMOT.AB3DMOT_libs.io import get_frame_det
 import open3d
 import collections
 import argparse
@@ -588,7 +588,6 @@ def run_tracking(detection_info, classes, tracker_dict, frame, autodrive=False):
     for label_num, cat in enumerate(classes):
         class_dets = list(filter(lambda line: line[1] == label_num + 1, frame_ab3dmot_format))
         if len(class_dets) > 0:
-            print(class_dets)
             detect_arr = get_frame_det(np.asarray(class_dets, dtype='object'), frame)
             tracks = tracker_dict[cat].track(detect_arr, frame, 'live')[0][0]
             if len(tracks) > 0:
