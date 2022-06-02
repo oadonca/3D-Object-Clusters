@@ -51,7 +51,6 @@ generated_3d_bb_list, detection_info, detection_metrics = run_detection(calib, i
     - ```detection_info['closest_face_center']: The closest face center of the 3D bounding box```
     - ```detection_info['closest_face_center_distance']: The distance to the closest face center of the 3D bounding box```
 - **detection_metrics**: Dictionary containing inference speed metrics
-    
 
 ##### Example of running detection
 ```
@@ -88,3 +87,60 @@ if True:
 pass
 
 ```
+
+##### run_tracking inputs
+- **detection_info**: List of dictionaries containing the detection results from run_detection (see above)
+- **classes**: List of classes to perform tracking for
+  - Example: ['Pedestrian', 'Car', 'Animal']
+- **tracking_dict**: Dict of trackers for each class, must be initialized once per sequence per class
+  - Trackers are of type AB3DMOT
+    - Example: `tracker_dict[label] = AB3DMOT(cfg, label, calib=None, oxts=None, img_dir=None, vis_dir=None, hw=None, log=log, ID_init=ID_start)`
+    - Only cfg, label, log, and ID_init are necessary for tracking without visualization
+    - label is a string representation of a class
+    - log is a writeable file
+    - cfg must be a dict containing at minimum these values:
+      - det_name: 3D detection method: `[pointrcnn, maskrcnn, bbox]`
+      - dataset: Dataset being operated on, select 'cepton' for autodrive competition: `[KITTI, cepton, nuScenes]`
+    - ID_init: Starting tracking ID number. Care should be taken when initializing trackers for different classes, as this number should
+      be very different per tracker to avoid overlap of IDs
+- **frame**: Frame number, should match the frame number of incoming detections
+- **autodrive**: Boolean signaling to tracking to map classes for autodrive competition or not
+
+##### run_tracking outputs
+- **results**: List of Dictionaries containing detection and tracking results (Note: tracking filters out some inputted detections based on heuristics)
+  - Each dictionary within the list is of the following format:
+    - ```detection_info['bb']: 2D bounding box```
+    - ```detection_info['class']: Detection class```
+    - ```detection_info['confidence']: 2D detection confidence```
+    - ```detection_info['frustum_pcd']: PointCloud as np array, contains all points within the detections frustum```
+    - ```detection_info['object_candidate_cluster']: PointCloud as np array, contains all points that belong to the 3D object```
+    - ```detection_info['generated_3d_bb']: Open3D 3D bounding box```
+    - ```detection_info['closest_face_center']: The closest face center of the 3D bounding box```
+    - ```detection_info['closest_face_center_distance']: The distance to the closest face center of the 3D bounding box```
+    - ```detection_info['score']: 3D detection confidence```
+    - ```detection_info['trk_id']: Tracking ID for 3D object```
+    - ```detection_info['alpha']: Object observation angle, ranges from -pi to pi```
+    - ```detection_info['velocity']: 1 x 3 array containing predicted velocity vector of object```
+    - ```detection_info['tracking_3d_bb']: 3D bounding box in another format, 1 x 7 array containing h,w,l,x,y,z,rot_y```
+    
+
+##### Example of running tracking
+```
+generated_3d_bb_list, detection_info, detection_metrics = run_detection(calib, image, pcd, bb_list, None, use_vis=False, use_mask=False)
+
+cfg = {
+  'det_name': 'bbox',
+  'dataset': 'cepton'
+}
+classes = ['Pedestrian', 'Car', 'Animal']
+time_str = time.time()
+log = 'log/log_%s.txt' % time_str
+log = open(log, 'w')
+tracker_dict = dict()
+ID_start = 1
+results = []
+for label in classes:
+    tracker_dict[label] = AB3DMOT(cfg, label, calib=None, oxts=None, img_dir=None, vis_dir=None, hw=None, log=log, ID_init=ID_start)
+    ID_start += 1000
+frame=0
+results = run_tracking(detection_info, classes, tracker_dict, frame, True)

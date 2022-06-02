@@ -172,7 +172,18 @@ def test_autodrive_scenes(file_num = 0, use_vis = False, tracking = False, use_m
 
     geom_added = False
     
-
+    cfg = Config('./AB3DMOT/configs/cepton.yml')[0]
+    classes = cfg.cat_list
+    time_str = time.time()
+    log = 'log/log_%s.txt' % time_str
+    log = open(log, 'w')
+    tracker_dict = dict()
+    ID_start = 1
+    results = []
+    for label in classes:
+        tracker_dict[label] = AB3DMOT(cfg, label, calib=None, oxts=None, img_dir=None, vis_dir=None, hw=None, log=log, ID_init=ID_start)
+        ID_start += 1000
+    frame=0
     for file_num in range(200,401):        
         # Load AD files
         image_path = f'autodrive/sensor_data/image/image{file_num}.npy'
@@ -180,11 +191,11 @@ def test_autodrive_scenes(file_num = 0, use_vis = False, tracking = False, use_m
         pcd_path = f'autodrive/sensor_data/pcd/pcd{file_num}.npy'
         image, bb_list, pcd = load_ad_files(image_path, bb_path, pcd_path)
 
-        # fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-        # ax.imshow(image)
-        # for bb in bb_list:
-        #     ax.add_patch(patches.Rectangle((int(bb[0]), int(bb[1])), int(bb[2])-int(bb[0]), int(bb[3])-int(bb[1]), fill=False))
-        # plt.show()
+        fig, ax = plt.subplots(1, 1, figsize=(5, 5))
+        ax.imshow(image)
+        for bb in bb_list:
+            ax.add_patch(patches.Rectangle((int(bb[0]), int(bb[1])), int(bb[2])-int(bb[0]), int(bb[3])-int(bb[1]), fill=False))
+        plt.show()
 
         pcd = np.array(pcd)
 
@@ -208,27 +219,15 @@ def test_autodrive_scenes(file_num = 0, use_vis = False, tracking = False, use_m
         vis.poll_events()
         vis.update_renderer()
 
-        if False:
+        if True:
             mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
             open3d.visualization.draw_geometries(object_candidate_clusters + generated_3d_bb_list + [mesh_frame])
 
-    vis.destroy_window()
-
-    if True:
-        frame = 0
-        cfg = Config('./AB3DMOT/configs/cepton.yml')[0]
-        classes = cfg.cat_list
-        time_str = time.time()
-        log = 'log/log_%s.txt' % time_str
-        log = open(log, 'w')
+        vis.destroy_window()
 
         # Trackers must only be initialized once per class, move to global scope if function will be called multiple times
-        tracker_dict = dict()
-        ID_start = 1
-        for label in classes:
-            tracker_dict[label] = AB3DMOT(cfg, label, calib=None, oxts=None, img_dir=None, vis_dir=None, hw=None, log=log, ID_init=ID_start)
-            ID_start += 1000
+        tracks = run_tracking(detection_info, classes, tracker_dict, frame, True)
+        results = results + tracks
 
-        trk_results_dict = run_tracking(detection_info, classes, tracker_dict, frame, True)
-        frame += 1
-    pass
+        frame+=1
+    return results
