@@ -570,6 +570,7 @@ def run_detection(calib, image, pcd, bb_list, labels=None, use_vis = False, use_
     print(f'{"Frustum Segmentation Time":<30}: {metrics["frustum_segmentation_time"]:.>5.4f} s.')
     print(f'{"DBSCAN Clustering Time":<30}: {metrics["dbscan_clustering_time"]:.>5.4f} s.')
     print(f'{"Bounding Box Generation Time":<30}: {metrics["3d_bounding_box_generation_time"]:.>5.4f} s.')
+    get_autodrive_score_info(detection_info)
         
     return generated_3d_bb_list, detection_info, metrics
 
