@@ -1,5 +1,5 @@
 import matplotlib.pyplot as plt
-from AB3DMOT.AB3DMOT_libs.io import get_frame_det
+# from AB3DMOT.AB3DMOT_libs.io import get_frame_det
 import open3d
 import collections
 import argparse
@@ -385,20 +385,20 @@ def remove_ground(pointcloud, labels=[], removal_offset = 0, visualize=False, au
     average_inlier = np.mean(pointcloud[inliers], axis=0)
 
     # Remove inliers
-    segmented_pointcloud = pcd.select_down_sample(inliers, invert=True)
+    segmented_pointcloud = pcd.select_by_index(inliers, invert=True)
     segmented_pointcloud_points = np.array(segmented_pointcloud.points)
     
     distance_to_plane = lambda x,y,z: (model[0]*x + model[1]*y + model[2]*z + model[3])/np.sqrt(np.sum(np.square(model[:3])))
     # Remove points below plane
     mask_inds = np.where(distance_to_plane(segmented_pointcloud_points[:, 0], segmented_pointcloud_points[:, 1], segmented_pointcloud_points[:, 2]) < removal_offset)
-    segmented_pointcloud = segmented_pointcloud.select_down_sample(mask_inds[0], invert=True)
+    segmented_pointcloud = segmented_pointcloud.select_by_index(mask_inds[0], invert=True)
     segmented_pointcloud_points = np.array(segmented_pointcloud.points)
     
     if visualize:
         # Visualize
-        inlier_cloud = pcd.select_down_sample(inliers) # use select_by_index() depending on version of open3d
+        inlier_cloud = pcd.select_by_index(inliers) # use select_by_index() depending on version of open3d
         inlier_cloud.paint_uniform_color([1.0, 0, 0])
-        outlier_cloud = pcd.select_down_sample(inliers, invert=True) # same as above
+        outlier_cloud = pcd.select_by_index(inliers, invert=True) # same as above
         outlier_cloud.paint_uniform_color([0, 1.0, 0.0])
         open3d.visualization.draw_geometries([inlier_cloud + outlier_cloud] + labels,
                                     zoom=0.8,
@@ -443,7 +443,7 @@ def apply_dbscan(detection, keep_n=5, visualize=True, autodrive=True):
     pcd_list = []
     for label, count in counts.most_common(keep_n):
         if not label < 0:
-            pcd_list.append(pcd.select_down_sample(np.argwhere(labels==label))) # select_by_index() instead
+            pcd_list.append(pcd.select_by_index(np.argwhere(labels==label))) # select_by_index() instead
 
     if len(pcd_list) > 1:
         cluster_losses = get_cluster_scores(pcd_list, detection, use_autodrive_classes=autodrive)
@@ -559,6 +559,13 @@ def run_detection(calib, image, pcd, bb_list, labels=None, use_vis = False, use_
     # GENERATE 3D BOUNDING BOXES 
     #############################################################################
     generated_3d_bb_list, metrics['3d_bounding_box_generation_time'] = time_function(generate_3d_bb, (detection_info,), {'oriented': True, 'visualize': use_vis})
+
+
+    #############################################################################
+    # GENERATE AUTODRIVE SCORE INFO
+    #############################################################################
+    if autodrive:
+        get_autodrive_score_info(detection_info)
     
     metrics['total_time'] += metrics['3d_bounding_box_generation_time'] 
 
