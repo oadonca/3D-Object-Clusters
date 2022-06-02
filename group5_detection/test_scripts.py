@@ -167,8 +167,8 @@ def test_autodrive_scenes(file_num = 0, use_vis = False, tracking = False, use_m
     calib = dict()
     calib['ad_transform_mat'], calib['ad_projection_mat'] = load_ad_projection_mats(intrinsics_path, extrinsics_path)
 
-    vis = open3d.visualization.Visualizer()
-    vis.create_window()
+    # vis = open3d.visualization.Visualizer()
+    # vis.create_window()
 
     geom_added = False
     
@@ -191,11 +191,11 @@ def test_autodrive_scenes(file_num = 0, use_vis = False, tracking = False, use_m
         pcd_path = f'autodrive/sensor_data/pcd/pcd{file_num}.npy'
         image, bb_list, pcd = load_ad_files(image_path, bb_path, pcd_path)
 
-        fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-        ax.imshow(image)
-        for bb in bb_list:
-            ax.add_patch(patches.Rectangle((int(bb[0]), int(bb[1])), int(bb[2])-int(bb[0]), int(bb[3])-int(bb[1]), fill=False))
-        plt.show()
+        # fig, ax = plt.subplots(1, 1, figsize=(5, 5))
+        # ax.imshow(image)
+        # for bb in bb_list:
+        #     ax.add_patch(patches.Rectangle((int(bb[0]), int(bb[1])), int(bb[2])-int(bb[0]), int(bb[3])-int(bb[1]), fill=False))
+        # plt.show()
 
         pcd = np.array(pcd)
 
@@ -205,25 +205,25 @@ def test_autodrive_scenes(file_num = 0, use_vis = False, tracking = False, use_m
         
         object_candidate_clusters = [detection['object_candidate_cluster'] for detection in detection_info if detection['object_candidate_cluster'] is not None]
             
-        vis.clear_geometries()
-        # ctr.camera_local_translate(-1, -1, 0)
-        for obj_cluster, bb_3d in zip(object_candidate_clusters, generated_3d_bb_list):
-            if not geom_added:
-                vis.add_geometry(obj_cluster)
-                vis.add_geometry(bb_3d)
-            else:
-                vis.update_geoemtry(obj_cluster)
-                vis.update_geometry(bb_3d)
+        # vis.clear_geometries()
+        # # ctr.camera_local_translate(-1, -1, 0)
+        # for obj_cluster, bb_3d in zip(object_candidate_clusters, generated_3d_bb_list):
+        #     if not geom_added:
+        #         vis.add_geometry(obj_cluster)
+        #         vis.add_geometry(bb_3d)
+        #     else:
+        #         vis.update_geoemtry(obj_cluster)
+        #         vis.update_geometry(bb_3d)
 
-        time.sleep(.1)                
-        vis.poll_events()
-        vis.update_renderer()
+        # time.sleep(.1)                
+        # vis.poll_events()
+        # vis.update_renderer()
 
-        if True:
-            mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
-            open3d.visualization.draw_geometries(object_candidate_clusters + generated_3d_bb_list + [mesh_frame])
+        # if True:
+        #     mesh_frame = open3d.geometry.TriangleMesh.create_coordinate_frame(size=2, origin=[0, 0, 0])
+        #     open3d.visualization.draw_geometries(object_candidate_clusters + generated_3d_bb_list + [mesh_frame])
 
-        vis.destroy_window()
+        # vis.destroy_window()
 
         # Trackers must only be initialized once per class, move to global scope if function will be called multiple times
         tracks = run_tracking(detection_info, classes, tracker_dict, frame, True)
