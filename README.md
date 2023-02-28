@@ -1,9 +1,8 @@
-# AutoDrive-ObjectDetection
-Running detection for AutoDrive
+# Class agnostic clustering-based 3D object detection
 
-1. Import run_detection() function from group5_detection.py
+1. Import run_detection() function from detection.py
 ```
-from group5_detection import run_detection
+from detection import run_detection
 ```
 
 ## Call function
@@ -55,22 +54,22 @@ generated_3d_bb_list, detection_info, detection_metrics = run_detection(calib, i
 
 ##### Example of running detection
 ```
-from group5_detection import run_detection
+from detection import run_detection
 from utils import load_ad_files, load_ad_projection_mats
 import open3d
 import numpy as np
 
 # Load project mat
-intrinsics_path = 'autodrive/intrinsics_zed.mat'
-extrinsics_path = 'autodrive/tform5.24.mat'
+intrinsics_path = 'intrinsics.mat'
+extrinsics_path = 'extrinsics.mat'
 
 calib = dict()
 calib['ad_transform_mat'], calib['ad_projection_mat'] = load_ad_projection_mats(intrinsics_path, extrinsics_path)
 
-# Load AD files
-image_path = 'autodrive/sensor_data/image/image231.npy'
-bb_path = 'autodrive/sensor_data/bb/image231_obj.npy'
-pcd_path = 'autodrive/sensor_data/pcd/pcd231.npy'
+# Load input data files
+image_path = 'image.npy'
+bb_path = 'bounding_box.npy'
+pcd_path = 'point_cloud.npy'
 image, bb_list, pcd = load_ad_files(image_path, bb_path, pcd_path)
 
 pcd = np.array(pcd)

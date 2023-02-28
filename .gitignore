@@ -1,5 +1,5 @@
 .env
-./group5_detection/kitti_groundtruth
+./detection/kitti_groundtruth
 *.npy
 kitti_tracking
 AB3DMOT
